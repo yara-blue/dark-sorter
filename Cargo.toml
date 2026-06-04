@@ -1,0 +1,26 @@
+[package]
+name = "dark-sorter"
+authors = [ "yara-blue" ]
+version = "0.1.0"
+edition = "2024"
+
+# [features]
+# test_support = ["tempfile"]
+
+[dependencies]
+color-eyre = "0.6.5"
+futures = "0.3.32"
+itertools = "0.14.0"
+tempfile = { version = "3" } # , optional =true }
+tokio = { version = "1.52.3", features = ["fs", "rt", "rt-multi-thread"] }
+tokio-stream = { version = "0.1.18", features = ["fs"] }
+tracing = "0.1.44"
+# tempfile = { version = "3", optional =true }
+
+[[test]]
+name = "watching_symlinks_new_rated"
+# required-features = ["test_support"]
+
+[[test]]
+name = "scan_symlinks_rated"
+# required-features = ["test_support"]
