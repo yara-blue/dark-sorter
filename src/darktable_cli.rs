@@ -5,6 +5,7 @@ use color_eyre::eyre::{Context, eyre};
 use tokio::process;
 use tokio::sync::Semaphore;
 
+use crate::SourceDir;
 use crate::xmp::Xmp;
 
 // TODO limit simultaneous open files in program with semaphore
@@ -14,7 +15,7 @@ use crate::xmp::Xmp;
 struct StringError(String);
 
 /// Globally limit to one file at the time
-pub async fn export(xmp: Xmp, xmp_file: &Path, source: &Path) -> color_eyre::Result<()> {
+pub async fn export(xmp: Xmp, xmp_file: &Path, source: &SourceDir) -> color_eyre::Result<()> {
     // darktable export is already highly parallel
     static LIMIT_EXPORTS: Semaphore = Semaphore::const_new(1);
 

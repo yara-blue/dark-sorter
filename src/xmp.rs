@@ -52,7 +52,6 @@ impl ParsedXmps {
         let loading = XmpState::Loading(Arc::clone(&notify));
         let owned_path = path.to_path_buf();
         let state = match self.0.lock().entry(owned_path) {
-            // FIXME might not need to be Mutex!
             Entry::Occupied(entry) => Some(entry.get().clone()),
             Entry::Vacant(slot) => {
                 slot.insert(loading);

@@ -1,14 +1,16 @@
 use std::collections::HashMap;
+use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use crate::xmp;
 use color_eyre::Section;
 use color_eyre::eyre::{Context, ContextCompat, OptionExt};
 use flate2::Compression;
 use tokio::task::JoinHandle;
-
 
 #[derive(Debug, Clone)]
 pub struct Db(Arc<spin::Mutex<HashMap<PathBuf, xmp::EditHash>>>);
@@ -20,18 +22,9 @@ pub enum LoadDbError {
     #[error("Db file not found")]
     NotFound,
     #[error("Io error opening file")]
-    Opening(Arc<std::io::Error>),
+    Opening(OpenSharedError),
     #[error("Could not deserialize compressed")]
     DeserComprr(postcard::Error),
-}
-
-impl LoadDbError {
-    fn from_io(err: std::io::Error) -> Self {
-        match err.kind() {
-            std::io::ErrorKind::NotFound => Self::NotFound,
-            _ => Self::Opening(Arc::new(err)),
-        }
-    }
 }
 
 impl Db {
@@ -47,7 +40,7 @@ impl Db {
         self.0.lock().insert(path, hash);
     }
 
-    pub async fn load_or_create() -> color_eyre::Result<Self> {
+    pub async fn load_from_default_dir_or_create() -> color_eyre::Result<Self> {
         let path = db_file_path()?;
         match Self::load_from_file(path.clone()).await {
             Ok(db) => Ok(db),
@@ -60,7 +53,8 @@ impl Db {
 
     pub async fn load_from_file(path: PathBuf) -> Result<Self, LoadDbError> {
         let task = tokio::task::spawn_blocking(move || {
-            let file = std::fs::File::open(path).map_err(LoadDbError::from_io)?;
+            let file = open_db_file_read_only(&path, Duration::from_secs(1))
+                .map_err(LoadDbError::Opening)?;
             let file = BufReader::new(file);
             let decompressor = flate2::read::ZlibDecoder::new(file);
 
@@ -85,8 +79,12 @@ impl Db {
                 .ok_or_eyre("Store to disk can only run when this is the last instance of the Db")?
                 .try_lock()
                 .expect("Arc::get_mut, guarantees no one else has the mutex");
-            let file = std::fs::File::create(&path).wrap_err("Could not open db files")?;
+
+            let file = open_db_file_writable(&path, Duration::from_secs(1))
+                .wrap_err("Could not open db files")?;
+            file.set_len(0).wrap_err("Could not truncate db file")?;
             let file = std::io::BufWriter::new(file);
+
             // use ZLIB as it has no check-summing (we don't need any, any
             // corruption will just lead to an image being re-exported not data
             // loss)
@@ -112,3 +110,62 @@ fn db_file_path() -> color_eyre::Result<PathBuf> {
         .join("db.bitcode"))
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum OpenSharedError {
+    #[error("Some process is holding an exclusive lock to the file")]
+    TimedOut,
+    #[error("Io error while opening the file")]
+    IoOpening(Arc<std::io::Error>),
+    #[error("Io error prevented figuring out the lock state")]
+    IoLocking(Arc<std::io::Error>),
+}
+
+fn open_db_file_read_only(path: &Path, timeout: Duration) -> Result<File, OpenSharedError> {
+    use std::fs;
+
+    let now = Instant::now();
+    let file = std::fs::OpenOptions::new()
+        .write(false)
+        .read(true)
+        .open(path)
+        .map_err(Arc::new)
+        .map_err(OpenSharedError::IoOpening)?;
+
+    while now.elapsed() < timeout {
+        match std::fs::File::try_lock_shared(&file) {
+            Ok(_) => return Ok(file),
+            Err(fs::TryLockError::WouldBlock) => {
+                sleep(Duration::from_millis(50));
+            }
+            Err(fs::TryLockError::Error(e)) => return Err(OpenSharedError::IoLocking(Arc::new(e))),
+        }
+    }
+
+    Err(OpenSharedError::TimedOut)
+}
+
+fn open_db_file_writable(path: &Path, timeout: Duration) -> Result<File, OpenSharedError> {
+    use std::fs;
+
+    let now = Instant::now();
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .read(false)
+        .truncate(false)
+        .create(true)
+        .open(path)
+        .map_err(Arc::new)
+        .map_err(OpenSharedError::IoOpening)?;
+
+    while now.elapsed() < timeout {
+        match std::fs::File::try_lock(&file) {
+            Ok(_) => return Ok(file),
+            Err(fs::TryLockError::WouldBlock) => {
+                sleep(Duration::from_millis(50));
+            }
+            Err(fs::TryLockError::Error(e)) => return Err(OpenSharedError::IoLocking(Arc::new(e))),
+        }
+    }
+
+    Err(OpenSharedError::TimedOut)
+}

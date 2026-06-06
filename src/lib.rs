@@ -1,9 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
+use std::fs::Metadata;
 use std::future;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use color_eyre::Section;
 use color_eyre::eyre::{Context, OptionExt};
@@ -22,7 +24,9 @@ pub mod test_support;
 mod darktable_cli;
 mod database;
 pub use database::Db;
+mod background_scanner;
 mod xmp;
+// mod watcher;
 
 // TODO work through modification date based state to skip files that have not changed
 // TODO: modification time optimization
@@ -52,25 +56,115 @@ impl ThrottledFs {
         tokio::fs::read_to_string(path).await
     }
 
-    async fn read_dir(&self, path: &PathBuf) -> io::Result<tokio::fs::ReadDir> {
+    async fn read_dir(&self, dir: impl AsRef<Dir>) -> io::Result<tokio::fs::ReadDir> {
         let _permit = self.file_limit.acquire().await;
-        tokio::fs::read_dir(&path).await
+        tokio::fs::read_dir(&dir.as_ref().0).await
     }
 }
 
-async fn create_dir_ignore_exists(path: &Path) -> io::Result<()> {
-    match tokio::fs::create_dir(&path).await {
+async fn create_dir_ignore_exists(dir: &TargetDir) -> io::Result<()> {
+    match tokio::fs::create_dir(&dir.0.0).await {
         Ok(_) => Ok(()),
         Err(e) if e.kind() == ErrorKind::AlreadyExists => Ok(()),
         Err(e) => Err(e),
     }
 }
 
+macro_rules! dir_wrapper {
+    ($name:ident, $wraps:ident) => {
+        #[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+        struct $name($wraps);
+
+        impl $name {
+            fn display(&self) -> std::path::Display<'_> {
+                self.0.display()
+            }
+            fn join(&self, path: impl AsRef<Path>) -> PathBuf {
+                self.0.join(path)
+            }
+        }
+        impl AsRef<$wraps> for $name {
+            fn as_ref(&self) -> &$wraps {
+                &self.0
+            }
+        }
+    };
+}
+dir_wrapper! {TargetDir, Dir}
+dir_wrapper! {SourceDir, Dir}
+
+macro_rules! path_wrapper {
+    ($name:ident) => {
+        #[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+        struct $name(PathBuf);
+
+        impl $name {
+            fn display(&self) -> std::path::Display<'_> {
+                self.0.display()
+            }
+            fn join(&self, path: impl AsRef<Path>) -> PathBuf {
+                self.0.join(path)
+            }
+        }
+        impl AsRef<Path> for $name {
+            fn as_ref(&self) -> &Path {
+                &self.0
+            }
+        }
+    };
+}
+path_wrapper! {XmpFile}
+path_wrapper! {Dir}
+
+/// Heuristic for how often a directory should be re-scanned based on how
+/// "active" it is. Use `DirScore::get` to get the current score. Higher is more
+/// active
+struct DirActivity {
+    ts_sum: u64,
+    count: u64,
+}
+
+// globally track to 100 most recently changed files
+
+// determine dir with most recently changed or added files
+
+// determine dir with most recently added dir
+
+// re-scan that dir more often
+
+// scan
+// global top 100 files every n-seconds
+// top 5 dirs with most recent changes, n-seconds * scan cost / 1000
+//   -- note: non recursive
+// dir with most recently added dirs (ignore files), n-seconds * scan cost /
+// 1000
+//
+// everything else once every not that often.
+
+//
+// age of the youngest 5 files.
+//      - paths to do targeted scan
+// cost of the scan
+//
+
+// for each file
+//      updated previous time since last change
+//          previous "score" + elapsed since that "scan"
+//      time "since" last change, lower better
+//
+//
+//      - more files that are old increases the "cost" and lowers score
+//      - file appearing is as important as one changing both have big impact
+//      - whole thing needs to be divided by count/number of files
+
+// TODO integrate dir scores into Db? do we flush to disk? yes right?
+
 pub async fn scan_clean_and_link(
-    source_dir: PathBuf,
-    target_dir: PathBuf,
+    source_dir: SourceDir,
+    target_dir: TargetDir,
     fs: ThrottledFs,
     previously_exported: database::Db,
+    dir_score: DirScores,
 ) -> color_eyre::Result<()> {
     let read_source = fs
         .read_dir(&source_dir)
@@ -85,16 +179,18 @@ pub async fn scan_clean_and_link(
         let entry = res
             .wrap_err("Could not read source dir entry")
             .with_note(|| format!("dir: {}", source_dir.display()))?;
-        let ty = entry
-            .file_type()
+        let meta = entry
+            .metadata()
             .await
-            .wrap_err("Could not resolve file type")
+            .wrap_err("Could not get dir entry metadata")
             .with_note(|| format!("entry: {}", entry.path().display()))?;
 
         let entry = DirFileStem::from(entry);
-        if ty.is_dir() {
+
+        if meta.is_dir() {
             dirs.push(entry);
-        } else if ty.is_file() && entry.path().extension().is_some_and(|e| e == "xmp") {
+        } else if meta.is_file() && entry.path().extension().is_some_and(|e| e == "xmp") {
+            dir_score.update(&source_dir, &meta);
             let entry = DirFileStem::from(entry);
             xmp_files.push(entry);
         }
@@ -161,7 +257,7 @@ pub async fn scan_clean_and_link(
 // this little wrapper works around that.
 fn recurse_into_subdir(
     dir: DirFileStem,
-    target: &Path,
+    target: &TargetDir,
     fs: &ThrottledFs,
     previously_exported: &database::Db,
 ) -> JoinHandle<color_eyre::Result<()>> {
@@ -216,7 +312,7 @@ impl Eq for DirFileStem {}
 /// - the corresponding_xmp does not have a rating for the image
 async fn should_remove_link(
     link: &DirFileStem,
-    source_dir: &Path,
+    source_dir: &SourceDir,
     xmps: &xmp::ParsedXmps,
     fs: &ThrottledFs,
 ) -> color_eyre::Result<bool> {
@@ -247,7 +343,7 @@ async fn should_remove_link(
 }
 
 async fn clean_stale_links(
-    source_dir: &Path,
+    source_dir: &SourceDir,
     links: impl Iterator<Item = &DirFileStem>,
     xmps: &xmp::ParsedXmps,
     fs: &ThrottledFs,
@@ -274,7 +370,7 @@ async fn clean_stale_links(
 async fn update_jpg_preview(
     xmp_files: &[DirFileStem],
     xmps: &xmp::ParsedXmps,
-    source_dir: &Path,
+    source_dir: &SourceDir,
     previously_exported: database::Db,
     fs: &ThrottledFs,
 ) -> color_eyre::Result<()> {
@@ -300,8 +396,8 @@ async fn update_jpg_preview(
 
 async fn create_link(
     xmp_path: &Path,
-    source_dir: &Path,
-    target_dir: &Path,
+    source_dir: &SourceDir,
+    target_dir: &TargetDir,
 ) -> color_eyre::Result<()> {
     // remove .RAW.xmp (with .RAW some raw format like .NEF or .DNG)
     // TODO refactor, make this nice
@@ -338,8 +434,8 @@ async fn should_be_linked(
 async fn create_new_links(
     xmp_files: &[DirFileStem],
     links: &HashSet<DirFileStem>,
-    target_dir: &Path,
-    source_dir: &Path,
+    target_dir: &TargetDir,
+    source_dir: &SourceDir,
     xmps: &xmp::ParsedXmps,
     fs: &ThrottledFs,
 ) -> color_eyre::Result<()> {
