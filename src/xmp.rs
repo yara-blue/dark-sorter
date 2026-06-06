@@ -6,8 +6,9 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use tokio::fs;
 use tokio::sync::Notify;
+
+use crate::ThrottledFs;
 
 /// TODO do similar thing for file metadata
 #[derive(Default)]
@@ -41,7 +42,7 @@ impl ReadParseError {
 }
 
 impl ParsedXmps {
-    pub(crate) async fn get_or_read_and_parse(&self, path: &Path) -> Result<Xmp, ReadParseError> {
+    pub(crate) async fn get_or_read_and_parse(&self, path: &Path, fs: &ThrottledFs) -> Result<Xmp, ReadParseError> {
         use std::collections::hash_map::Entry;
         let notify = Arc::new(Notify::new());
         let loading = XmpState::Loading(Arc::clone(&notify));
@@ -66,7 +67,7 @@ impl ParsedXmps {
                 }
             }
             None => {
-                let xmp = fs::read_to_string(path)
+                let xmp = fs.read_to_string(path)
                     .await
                     .map_err(ReadParseError::from_io)?;
                 let res = Xmp::from_str(&xmp).map_err(ReadParseError::Parse);

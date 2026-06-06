@@ -9,8 +9,6 @@ use color_eyre::eyre::{Context, ContextCompat, OptionExt};
 use flate2::Compression;
 use tokio::task::JoinHandle;
 
-// TODO use Free nodes available to non-superuser
-// https://docs.rs/systemstat/0.2.7/systemstat/data/struct.Filesystem.html to limit file scanning
 
 #[derive(Debug, Clone)]
 pub struct Db(Arc<spin::Mutex<HashMap<PathBuf, xmp::EditHash>>>);
