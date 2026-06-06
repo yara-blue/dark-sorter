@@ -21,9 +21,12 @@ pub mod test_support;
 
 mod darktable_cli;
 mod database;
+pub use database::Db;
 mod xmp;
 
-// TODO work through modification date based state to skip dir and files that have not changed
+// TODO work through modification date based state to skip files that have not changed
+// TODO: modification time optimization
+// ^ use another "get_or_read_and_parse" like structure
 
 /// Limit concurrent fs access so we do not exceed the open file handle limit.
 #[derive(Clone)]
@@ -51,20 +54,29 @@ impl ThrottledFs {
 
     async fn read_dir(&self, path: &PathBuf) -> io::Result<tokio::fs::ReadDir> {
         let _permit = self.file_limit.acquire().await;
-        tokio::fs::read_dir(path).await
+        tokio::fs::read_dir(&path).await
+    }
+}
+
+async fn create_dir_ignore_exists(path: &Path) -> io::Result<()> {
+    match tokio::fs::create_dir(&path).await {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e),
     }
 }
 
 pub async fn scan_clean_and_link(
-    source: PathBuf,
-    target: PathBuf,
+    source_dir: PathBuf,
+    target_dir: PathBuf,
     fs: ThrottledFs,
     previously_exported: database::Db,
 ) -> color_eyre::Result<()> {
     let read_source = fs
-        .read_dir(&source)
+        .read_dir(&source_dir)
         .await
-        .wrap_err("Could not read source dir")?;
+        .wrap_err("Could not read source dir")
+        .with_note(|| format!("path: {}", source_dir.display()))?;
     let mut read_source = ReadDirStream::new(read_source);
 
     let mut dirs = Vec::new();
@@ -72,7 +84,7 @@ pub async fn scan_clean_and_link(
     while let Some(res) = read_source.next().await {
         let entry = res
             .wrap_err("Could not read source dir entry")
-            .with_note(|| format!("dir: {}", source.display()))?;
+            .with_note(|| format!("dir: {}", source_dir.display()))?;
         let ty = entry
             .file_type()
             .await
@@ -89,15 +101,20 @@ pub async fn scan_clean_and_link(
     }
 
     let mut links = HashSet::new();
-    let read_target = fs
-        .read_dir(&target)
+    create_dir_ignore_exists(&target_dir)
         .await
-        .wrap_err("Could not read source dir")?;
+        .wrap_err("Could not create missing target dir")
+        .with_note(|| format!("path: {}", source_dir.display()))?;
+    let read_target = fs
+        .read_dir(&target_dir)
+        .await
+        .wrap_err("Could not read target dir")
+        .with_note(|| format!("path: {}", source_dir.display()))?;
     let mut read_target = ReadDirStream::new(read_target);
     while let Some(res) = read_target.next().await {
         let entry = res
             .wrap_err("Could not read target dir entry")
-            .with_note(|| format!("dir: {}", source.display()))?;
+            .with_note(|| format!("dir: {}", source_dir.display()))?;
         let ty = entry
             .file_type()
             .await
@@ -111,16 +128,29 @@ pub async fn scan_clean_and_link(
 
     let recursive_scans = dirs
         .into_iter()
-        .map(|dir| recurse_into_subdir(dir, &target, &fs, &previously_exported))
+        .map(|dir| recurse_into_subdir(dir, &target_dir, &fs, &previously_exported))
         .collect::<FuturesUnordered<_>>()
         .map(|join_result| join_result.wrap_err("A panic occurred").flatten())
         .try_for_each(|()| future::ready(Ok(())));
 
     let parsed_xmps = xmp::ParsedXmps::default();
     try_join4(
-        clean_stale_links(&source, links.iter(), &parsed_xmps, &fs),
-        create_new_links(&xmp_files, &links, &target, &parsed_xmps, &fs),
-        update_jpg_preview(&xmp_files, &parsed_xmps, &source, previously_exported, &fs),
+        clean_stale_links(&source_dir, links.iter(), &parsed_xmps, &fs),
+        create_new_links(
+            &xmp_files,
+            &links,
+            &target_dir,
+            &source_dir,
+            &parsed_xmps,
+            &fs,
+        ),
+        update_jpg_preview(
+            &xmp_files,
+            &parsed_xmps,
+            &source_dir,
+            previously_exported,
+            &fs,
+        ),
         recursive_scans,
     )
     .await?;
@@ -202,13 +232,10 @@ async fn should_remove_link(
         return Ok(true);
     }
 
-    // TODO: modification time optimization
-    // ^ use another "get_or_read_and_parse" like structure
-
     let corresponding_xmp = source_dir.join(&link.file_stem()).with_extension("xmp");
     let xmp = match xmps.get_or_read_and_parse(&corresponding_xmp, &fs).await {
         Ok(xmp) => xmp,
-        Err(xmp::ReadParseError::NotFound) => return Ok(true),
+        Err(xmp::ReadParseError::NotFound(_)) => return Ok(true),
         Err(e) => return Err(e).wrap_err("Could not read xmp"),
     };
 
@@ -271,17 +298,24 @@ async fn update_jpg_preview(
         .await
 }
 
-async fn create_link(xmp_file: &Path, target: &Path) -> color_eyre::Result<()> {
-    let jpg = xmp_file.with_extension("jpg");
-    let target = target.join(
-        jpg.file_name()
-            .expect("TODO!(yara) move this check to collection"),
-    );
+async fn create_link(
+    xmp_path: &Path,
+    source_dir: &Path,
+    target_dir: &Path,
+) -> color_eyre::Result<()> {
+    // remove .RAW.xmp (with .RAW some raw format like .NEF or .DNG)
+    // TODO refactor, make this nice
+    let mut xmp_path = xmp_path.with_extension("");
+    xmp_path.set_extension("");
+    let name = xmp_path.file_name().expect("DirEntry has a file name");
 
-    tokio::fs::symlink(&jpg, &target)
+    let preview = source_dir.join(&name).with_extension("jpg");
+    let link = target_dir.join(&name).with_extension("jpg");
+
+    tokio::fs::symlink(&preview, &link)
         .await
         .wrap_err("Could not create link")
-        .with_note(|| format!("link: {} -> {}", target.display(), jpg.display()))
+        .with_note(|| format!("link: {} -> {}", link.display(), preview.display()))
 }
 
 async fn should_be_linked(
@@ -292,8 +326,9 @@ async fn should_be_linked(
     let xmp = xmps
         .get_or_read_and_parse(xmp_file, fs)
         .await
-        .wrap_err("Could not read xmp")?;
-    if xmp.rating.is_none() {
+        .wrap_err("Could not read xmp")
+        .with_note(|| format!("Path: {}", xmp_file.display()))?;
+    if xmp.rating.is_some() {
         Ok(true)
     } else {
         Ok(false)
@@ -303,7 +338,8 @@ async fn should_be_linked(
 async fn create_new_links(
     xmp_files: &[DirFileStem],
     links: &HashSet<DirFileStem>,
-    target: &Path,
+    target_dir: &Path,
+    source_dir: &Path,
     xmps: &xmp::ParsedXmps,
     fs: &ThrottledFs,
 ) -> color_eyre::Result<()> {
@@ -311,11 +347,10 @@ async fn create_new_links(
         .iter()
         .filter(|xmp| not_already_linked(*xmp, &links))
         .map(|xmp| async {
-            if should_be_linked(xmp.path(), xmps, fs)
-                .await
+            if dbg!(should_be_linked(xmp.path(), xmps, fs).await)
                 .wrap_err("Could not determine whether link should be added")?
             {
-                create_link(&xmp.path(), target).await
+                create_link(xmp.path(), source_dir, target_dir).await
             } else {
                 Ok(())
             }

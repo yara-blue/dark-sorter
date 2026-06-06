@@ -23,26 +23,30 @@ pub(crate) enum XmpState {
 
 #[derive(Debug, thiserror::Error, Clone)]
 pub enum ReadParseError {
-    #[error("File does not exist")]
-    NotFound,
-    #[error("Could not read xmp file")]
-    Io(#[source] Arc<std::io::Error>),
+    #[error("File does not exist, path: {}", .0.display())]
+    NotFound(Arc<Path>),
+    #[error("Could not read xmp file, path: {}", .1.display())]
+    Io(#[source] Arc<std::io::Error>, Arc<Path>),
     #[error("Could not parse xmp file")]
     Parse(#[source] ParseError),
 }
 
 impl ReadParseError {
-    pub(crate) fn from_io(e: tokio::io::Error) -> Self {
+    pub(crate) fn from_io(e: tokio::io::Error, path: &Path) -> Self {
         if let ErrorKind::NotFound = e.kind() {
-            Self::NotFound
+            Self::NotFound(path.to_path_buf().into())
         } else {
-            Self::Io(Arc::new(e))
+            Self::Io(Arc::new(e), path.to_path_buf().into())
         }
     }
 }
 
 impl ParsedXmps {
-    pub(crate) async fn get_or_read_and_parse(&self, path: &Path, fs: &ThrottledFs) -> Result<Xmp, ReadParseError> {
+    pub(crate) async fn get_or_read_and_parse(
+        &self,
+        path: &Path,
+        fs: &ThrottledFs,
+    ) -> Result<Xmp, ReadParseError> {
         use std::collections::hash_map::Entry;
         let notify = Arc::new(Notify::new());
         let loading = XmpState::Loading(Arc::clone(&notify));
@@ -67,9 +71,10 @@ impl ParsedXmps {
                 }
             }
             None => {
-                let xmp = fs.read_to_string(path)
+                let xmp = fs
+                    .read_to_string(path)
                     .await
-                    .map_err(ReadParseError::from_io)?;
+                    .map_err(|e| ReadParseError::from_io(e, path))?;
                 let res = Xmp::from_str(&xmp).map_err(ReadParseError::Parse);
                 let new_state = match res.clone() {
                     Ok(xmp) => XmpState::Loaded(xmp),
@@ -124,7 +129,7 @@ impl FromStr for Xmp {
 }
 
 pub(crate) fn parse_raw(s: &str) -> Result<Arc<str>, ParseError> {
-    let start_pattern = r#""xmpMM:DerivedFrom=""#;
+    let start_pattern = r#"xmpMM:DerivedFrom=""#;
     let file_name_start =
         s.find(start_pattern).ok_or(ParseError::NoRawListed)? + start_pattern.len();
     let file_name_end = s[file_name_start..]
@@ -152,7 +157,7 @@ pub(crate) fn parse_edits(s: &str) -> Option<EditHash> {
 }
 
 pub(crate) fn parse_rating(s: &str) -> Result<Option<u8>, ParseError> {
-    let start_pattern = r#""xmp:Rating=""#;
+    let start_pattern = r#"xmp:Rating=""#;
     let rating_start =
         s.find(start_pattern).ok_or(ParseError::NoRatingStart)? + start_pattern.len();
     let rating_end = s[rating_start..].find('"').ok_or(ParseError::NoFieldEnd)?;
