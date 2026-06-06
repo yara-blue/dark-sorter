@@ -1,9 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::future;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use color_eyre::Section;
 use color_eyre::eyre::Context;
@@ -18,6 +17,7 @@ use tokio_stream::wrappers::ReadDirStream;
 pub mod test_support;
 
 mod darktable_cli;
+mod database;
 mod xmp;
 
 // TODO work through modification date based state to skip dir and files that have not changed
@@ -25,7 +25,7 @@ mod xmp;
 pub async fn scan_clean_and_link(
     source: PathBuf,
     target: PathBuf,
-    previously_exported: Arc<HashMap<PathBuf, xmp::EditHash>>,
+    previously_exported: database::Db,
 ) -> color_eyre::Result<()> {
     let read_source = read_dir(&source)
         .await
@@ -96,11 +96,11 @@ pub async fn scan_clean_and_link(
 fn recurse_into_subdir(
     dir: DirFileStem,
     target: &Path,
-    previously_exported: &Arc<HashMap<PathBuf, xmp::EditHash>>,
+    previously_exported: &database::Db,
 ) -> JoinHandle<color_eyre::Result<()>> {
     let source = dir.path().to_path_buf();
     let target = target.join(&dir.file_stem());
-    let previously_exported = Arc::clone(previously_exported);
+    let previously_exported = previously_exported.clone();
     tokio::spawn(scan_clean_and_link(source, target, previously_exported))
 }
 
@@ -208,7 +208,7 @@ async fn update_jpg_preview(
     xmp_files: &[DirFileStem],
     xmps: &xmp::ParsedXmps,
     source_dir: &Path,
-    previously_exported: Arc<HashMap<PathBuf, xmp::EditHash>>,
+    previously_exported: database::Db,
 ) -> color_eyre::Result<()> {
     xmp_files
         .iter()
@@ -216,7 +216,7 @@ async fn update_jpg_preview(
             let xmp = xmps.get_or_read_and_parse(entry.path()).await?;
             if let Some(current_edits) = xmp.edits
                 && let Some(exported_edits) = previously_exported.get(entry.path())
-                && current_edits != *exported_edits
+                && current_edits != exported_edits
             {
                 darktable_cli::export(xmp, entry.path(), source_dir)
                     .await

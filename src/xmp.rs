@@ -82,7 +82,7 @@ impl ParsedXmps {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EditHash(u64);
 
 #[derive(Debug, Clone)]
