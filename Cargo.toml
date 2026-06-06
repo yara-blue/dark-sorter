@@ -1,5 +1,6 @@
 [package]
 name = "dark-sorter"
+description = "link jpg's of rated photos to a sibling folder structure"
 authors = [ "yara-blue" ]
 version = "0.1.0"
 edition = "2024"
@@ -11,8 +12,12 @@ edition = "2024"
 color-eyre = "0.6.5"
 futures = "0.3.32"
 itertools = "0.14.0"
+spin = "0.12.0"
+systemstat = "0.2.7"
 tempfile = { version = "3" } # , optional =true }
-tokio = { version = "1.52.3", features = ["fs", "rt", "rt-multi-thread"] }
+thiserror = "2.0.18"
+thread-priority = "3.0.0"
+tokio = { version = "1.52.3", features = ["fs", "process", "rt", "rt-multi-thread"] }
 tokio-stream = { version = "0.1.18", features = ["fs"] }
 tracing = "0.1.44"
 # tempfile = { version = "3", optional =true }

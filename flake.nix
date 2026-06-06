@@ -43,6 +43,8 @@
 
             inherit src;
 
+            nativeBuildInputs = [ makeWrapper ];
+
             cargoLock = {
               lockFile = "${src}/Cargo.lock";
             };
@@ -51,6 +53,15 @@
               inherit (cargoTOML.package) description homepage;
               maintainers = cargoTOML.package.authors;
             };
+
+            postInstall = ''
+              wrapProgram $out/bin/dark-sorter --prefix PATH: ${
+                lib.makeBinPath [
+                  darktable # for darktable-cli
+                  coreutils # for nice
+                ]
+              }
+            '';
           };
 
         devShell =
