@@ -1,18 +1,20 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
+use crate::darktable_cli::running_as_root;
+use crate::watcher::EyreWithPath;
 use crate::xmp;
 use color_eyre::Section;
 use color_eyre::eyre::{Context, ContextCompat, OptionExt};
 use flate2::Compression;
 use tokio::task::JoinHandle;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Db(Arc<spin::Mutex<HashMap<PathBuf, xmp::EditHash>>>);
 
 #[derive(Debug, thiserror::Error)]
@@ -22,16 +24,24 @@ pub enum LoadDbError {
     #[error("Db file not found")]
     NotFound,
     #[error("Io error opening file")]
-    Opening(OpenSharedError),
+    Opening(#[source] OpenSharedError),
     #[error("Could not deserialize compressed")]
-    DeserComprr(postcard::Error),
+    DeserComprr(#[source] postcard::Error),
+}
+
+impl From<OpenSharedError> for LoadDbError {
+    fn from(e: OpenSharedError) -> Self {
+        if let OpenSharedError::IoOpening(e) = &e
+            && e.kind() == ErrorKind::NotFound
+        {
+            Self::NotFound
+        } else {
+            Self::Opening(e)
+        }
+    }
 }
 
 impl Db {
-    pub fn new() -> Self {
-        Self(Arc::new(spin::Mutex::new(HashMap::new())))
-    }
-
     pub fn get(&self, path: &Path) -> Option<xmp::EditHash> {
         self.0.lock().get(path).copied()
     }
@@ -41,27 +51,27 @@ impl Db {
     }
 
     pub async fn load_from_default_dir_or_create() -> color_eyre::Result<Self> {
-        let path = db_file_path()?;
+        let path = setup_db_file_path()?;
         match Self::load_from_file(path.clone()).await {
             Ok(db) => Ok(db),
-            Err(LoadDbError::NotFound) => Ok(Self::new()),
+            Err(LoadDbError::NotFound) => Ok(Self::default()),
             Err(other) => Err(other)
                 .wrap_err("Could not load db")
-                .with_note(|| format!("path: {}", path.display())),
+                .note_path(path),
         }
     }
 
     pub async fn load_from_file(path: PathBuf) -> Result<Self, LoadDbError> {
         let task = tokio::task::spawn_blocking(move || {
-            let file = open_db_file_read_only(&path, Duration::from_secs(1))
-                .map_err(LoadDbError::Opening)?;
+            let file =
+                open_db_file_read_only(&path, Duration::from_secs(1)).map_err(LoadDbError::from)?;
             let file = BufReader::new(file);
             let decompressor = flate2::read::ZlibDecoder::new(file);
 
             let mut buffer = [0; 1024];
             let (map, _): (HashMap<PathBuf, xmp::EditHash>, _) =
                 postcard::from_io((decompressor, &mut buffer)).map_err(LoadDbError::DeserComprr)?;
-            Ok(map)
+            Ok::<_, LoadDbError>(map)
         });
         let map = task
             .await
@@ -72,7 +82,7 @@ impl Db {
     /// Can only be called when nothing else holds a lock to the map anymore if
     /// something did the critical section of the lock would become too long.
     pub async fn store_to_disk(mut self) -> color_eyre::Result<()> {
-        let path: Arc<Path> = db_file_path()?.into();
+        let path: Arc<Path> = setup_db_file_path()?.into();
         let path2 = Arc::clone(&path);
         let task: JoinHandle<color_eyre::Result<()>> = tokio::task::spawn_blocking(move || {
             let map = Arc::get_mut(&mut self.0)
@@ -98,16 +108,24 @@ impl Db {
         });
         task.await
             .wrap_err("compress task panicked")?
-            .with_note(|| format!("path: {}", path2.display()))?;
+            .note_path(path2)?;
         Ok(())
     }
 }
 
-fn db_file_path() -> color_eyre::Result<PathBuf> {
-    Ok(dirs::data_local_dir()
-        .wrap_err("Could not get user data dir")?
-        .join(env!("CARGO_PKG_NAME"))
-        .join("db.bitcode"))
+fn setup_db_file_path() -> color_eyre::Result<PathBuf> {
+    let dir = if running_as_root() {
+        Path::new("/var/cache").to_path_buf()
+    } else {
+        dirs::data_local_dir().wrap_err("Could not get user data dir")?
+    }
+    .join(env!("CARGO_PKG_NAME"));
+
+    std::fs::create_dir(&dir)
+        .wrap_err("Could not setup dir for database")
+        .with_note(|| format!("database dir: {}", dir.display()))?;
+
+    Ok(dir.join("db.bitcode"))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -115,9 +133,9 @@ pub enum OpenSharedError {
     #[error("Some process is holding an exclusive lock to the file")]
     TimedOut,
     #[error("Io error while opening the file")]
-    IoOpening(Arc<std::io::Error>),
+    IoOpening(#[source] Arc<std::io::Error>),
     #[error("Io error prevented figuring out the lock state")]
-    IoLocking(Arc<std::io::Error>),
+    IoLocking(#[source] Arc<std::io::Error>),
 }
 
 fn open_db_file_read_only(path: &Path, timeout: Duration) -> Result<File, OpenSharedError> {

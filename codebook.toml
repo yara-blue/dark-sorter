@@ -1,6 +1,9 @@
 words = [
     "bitcode",
     "darktable",
+    "fanotify",
+    "fds",
+    "fsid",
     "mrrow",
     "xmp",
     "xmps",

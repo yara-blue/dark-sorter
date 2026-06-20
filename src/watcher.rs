@@ -1,76 +1,226 @@
-use std::path::PathBuf;
+use std::hint::cold_path;
+use std::io::ErrorKind;
+use std::str::FromStr;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
 
-use notify::EventHandler;
-use notify::event::{Flag, RemoveKind};
-use tokio::sync::mpsc;
+use caps::{CapSet, Capability};
+use color_eyre::Section;
+use color_eyre::eyre::{Context, eyre};
+use fanotify_fid::Fanotify;
+use fanotify_fid::consts::{
+    FAN_CREATE, FAN_DELETE, FAN_MARK_ADD, FAN_MARK_FILESYSTEM, FAN_MODIFY, FAN_MOVE,
+    FAN_MOVED_FROM, FAN_MOVED_TO,
+};
+use fanotify_fid::types::FidEvent;
 
-// io-notify takes 1kb per file watched
-// -> only use it for dirs.
-//      - at this point is it worth it even?
-//      normal max is 128 files to watch... 
-//      you'll pretty easily get more dirs...
-// -> scan for other changes :((.
-//      -> optimize the scanner more!!!!
-//      -> rescan period adapts to how often files where changed
-//      (if files in dir changed recently re-scan more often, 
-//       take into account some kind of scan 'cost' for this)
-//      ((actually if _file_ changed recently consider scanning 
-//       that even more often))
+use crate::ImageExporter;
+use crate::fs::{PreviewFile, PreviewLink, SourceDir, TargetDir, ThrottledFs, XmpFile};
+use crate::xmp::{self, Xmp};
 
-// TODO deal with limit on io-notify watchers
-//  - figure out limit,
-//  - count current files,
-//  - decide on behavior
-//      - only watch for adding/removing dirs
-//      - above + watch last added dir(s)
-//      - all files and dirs
+pub fn start(dir: SourceDir) -> color_eyre::Result<Receiver<Kitty>> {
+    if !caps::has_cap(None, CapSet::Permitted, Capability::CAP_SYS_ADMIN)
+        .wrap_err("Could not check capabilities")?
+    {
+        return Err(eyre!("Must have capability CAP_SYS_ADMIN to run watcher"))
+            .suggestion("Try running as root using sudo");
+    }
 
-// TODO deal with dirs being removed
-// TODO deal with dirs being added
+    let fan = Fanotify::new()
+        .report_fid()
+        .report_dir_fid()
+        .report_target_fid()
+        .report_name()
+        .init()
+        .wrap_err("Could not initialize fanotify")?;
 
-enum WatchEvent {
-    Error(notify::Error),
-    NeedRescan,
-    XmpTouched(PathBuf),
-    XmpRemoved(PathBuf),
-    DirRemoved(PathBuf),
-}
+    fan.mark(
+        FAN_MARK_ADD | FAN_MARK_FILESYSTEM,
+        FAN_CREATE | FAN_DELETE | FAN_MODIFY | FAN_MOVE,
+        &dir,
+    )
+    .wrap_err("Could not mark filesystem for watching")
+    .note_path(&dir)?;
 
-struct FilterAndSend(mpsc::Sender<WatchEvent>);
-
-impl EventHandler for FilterAndSend {
-    fn handle_event(&mut self, event: notify::Result<notify::Event>) {
-    match event {
-            Ok(event) => {
-                if let Some(flag) = event.flag() && flag == Flag::Rescan {
-                    self.0.blocking_send(WatchEvent::NeedRescan);
-                }
-                match event.kind {
-                    notify::EventKind::Create(_) |
-                    notify::EventKind::Modify(_) if xmp(&event.paths) => todo!(),
-                    notify::EventKind::Remove(_) => todo!(),
-
-notify::EventKind::Modify(_) |
-                    notify::EventKind::Create(_) |
-                    notify::EventKind::Access(_) |
-                    notify::EventKind::Any |
-                    notify::EventKind::Other => (),
-                }
-            }
-            Err(e) => {
-                self.0.blocking_send(WatchEvent::Error(e));
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mount_fds = [fanotify_fid::open_mount(&dir).unwrap()];
+        loop {
+            let mut buf = vec![0u8; 4096];
+            for event in fan
+                .read_events(&mount_fds, &mut buf, None)
+                .expect("could not read fanotify events")
+            {
+                handle_event(event, &dir, &tx);
             }
         }
+    });
+    Ok(rx)
+}
 
+fn should_be_linked(xmp: &Xmp) -> bool {
+    xmp.rating.is_some()
+}
+
+pub async fn handle_kitty_fs_change<Exporter: ImageExporter>(
+    event: Kitty,
+    source: &SourceDir,
+    target: &TargetDir,
+    fs: &ThrottledFs,
+) -> color_eyre::Result<()> {
+    let xmp = fs
+        .read_to_string(&event.xmp_file)
+        .await
+        .map_err(|e| xmp::ReadParseError::from_io(e, &event.xmp_file))?;
+    let xmp = Xmp::from_str(&xmp).map_err(xmp::ReadParseError::Parse)?;
+    let xmp_path = event.xmp_file;
+    let link = xmp_path.link_path(target);
+    let preview = xmp_path.preview_path(source);
+
+    match event.event {
+        KittyKind::FileCreated => {
+            if should_be_linked(&xmp) {
+                Exporter::export(&xmp, &xmp_path, source)
+                    .await
+                    .wrap_err("failed to export image")?;
+                tokio::fs::symlink(&preview, &link)
+                    .await
+                    .wrap_err("Could not create link")
+                    .with_note(|| format!("link: {} -> {}", link.display(), preview.display()))?;
+            }
+        }
+        KittyKind::FileDeleted => {
+            clean_up(&link, &preview)?;
+        }
+        KittyKind::FileModified => {
+            if should_be_linked(&xmp) {
+                Exporter::export(&xmp, &xmp_path, source)
+                    .await
+                    .wrap_err("failed to export image")?;
+                tokio::fs::symlink(&preview, &link)
+                    .await
+                    .wrap_err("Could not create link")
+                    .with_note(|| format!("link: {} -> {}", link.display(), preview.display()))?;
+            } else {
+                clean_up(&link, &preview)?;
+            }
+        }
+        KittyKind::FileMovedFrom => {
+            clean_up(&link, &preview)?;
+        }
+        KittyKind::FileMovedTo => {
+            if should_be_linked(&xmp) {
+                tokio::fs::symlink(&preview, &link)
+                    .await
+                    .wrap_err("Could not create link")
+                    .with_note(|| format!("link: {} -> {}", link.display(), preview.display()))?;
+            }
+        }
+    };
+
+    Ok(())
+}
+
+pub trait ResultExt<T, E> {
+    fn err_ok_if(self, filter: impl FnOnce(&E) -> bool, val: T) -> Self;
+}
+
+impl<T, E> ResultExt<T, E> for Result<T, E> {
+    fn err_ok_if(self, filter: impl FnOnce(&E) -> bool, val: T) -> Self {
+        match self {
+            Ok(v) => Ok(v),
+            Err(e) if filter(&e) => Ok(val),
+            Err(e) => Err(e),
+        }
     }
 }
 
-fn xmp(paths: &[PathBuf]) -> bool {
-    paths.iter().any(f)
-
+pub trait EyreWithPath {
+    fn note_path(self, path: impl AsRef<std::path::Path>) -> Self;
 }
 
-fn start_watcher(tx: mpsc::Sender<WatchEvent>) {
-    let mut watcher = notify::recommended_watcher()
+impl<T> EyreWithPath for color_eyre::Result<T> {
+    fn note_path(self, path: impl AsRef<std::path::Path>) -> Self {
+        self.with_note(|| format!("path: {}", path.as_ref().display()))
+    }
 }
 
+fn clean_up(link: &PreviewLink, preview: &PreviewFile) -> Result<(), color_eyre::eyre::Error> {
+    std::fs::remove_file(link)
+        .err_ok_if(|e| e.kind() == ErrorKind::NotFound, ())
+        .wrap_err("Could not remove link to preview")
+        .note_path(link)?;
+    std::fs::remove_file(link)
+        .err_ok_if(|e| e.kind() == ErrorKind::NotFound, ())
+        .wrap_err("Could not remove preview jpg")
+        .note_path(preview)?;
+    Ok(())
+}
+
+pub struct Kitty {
+    xmp_file: XmpFile,
+    event: KittyKind,
+    pub overflow: bool,
+}
+
+pub enum KittyKind {
+    FileCreated,
+    FileDeleted,
+    FileModified,
+    FileMovedTo,
+    FileMovedFrom,
+}
+
+fn handle_event(event: FidEvent, dir: &SourceDir, tx: &Sender<Kitty>) {
+    // Must run fast, gets ran for each file on the mount
+    if let Some(ext) = event.path.extension()
+        && ext == "xmp"
+    {
+        cold_path();
+
+        if event.path.starts_with(dir) && event.path.is_file() {
+            if event.mask & FAN_CREATE > 0 {
+                tx.send(Kitty {
+                    xmp_file: XmpFile(event.path.clone()),
+                    event: KittyKind::FileCreated,
+                    overflow: event.is_overflow(),
+                })
+                .expect("could not send");
+            }
+            if event.mask & FAN_DELETE > 0 {
+                tx.send(Kitty {
+                    xmp_file: XmpFile(event.path.clone()),
+                    event: KittyKind::FileDeleted,
+                    overflow: event.is_overflow(),
+                })
+                .expect("could not send");
+            }
+            if event.mask & FAN_MOVED_FROM > 0 {
+                tx.send(Kitty {
+                    xmp_file: XmpFile(event.path.clone()),
+                    event: KittyKind::FileMovedFrom,
+                    overflow: event.is_overflow(),
+                })
+                .expect("could not send");
+            }
+            if event.mask & FAN_MOVED_TO > 0 {
+                tx.send(Kitty {
+                    xmp_file: XmpFile(event.path.clone()),
+                    event: KittyKind::FileMovedTo,
+                    overflow: event.is_overflow(),
+                })
+                .expect("could not send");
+            }
+            if event.mask & FAN_MODIFY > 0 {
+                tx.send(Kitty {
+                    xmp_file: XmpFile(event.path.clone()),
+                    event: KittyKind::FileModified,
+                    overflow: event.is_overflow(),
+                })
+                .expect("could not send");
+            } else {
+                unreachable!("We only subscribed to the above listed events")
+            };
+        }
+    }
+}

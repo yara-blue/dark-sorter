@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use tokio::sync::Notify;
 
-use crate::ThrottledFs;
+use crate::fs::ThrottledFs;
 
 /// TODO do similar thing for file metadata
 #[derive(Default)]
@@ -32,11 +32,11 @@ pub enum ReadParseError {
 }
 
 impl ReadParseError {
-    pub(crate) fn from_io(e: tokio::io::Error, path: &Path) -> Self {
+    pub(crate) fn from_io(e: tokio::io::Error, path: impl AsRef<Path>) -> Self {
         if let ErrorKind::NotFound = e.kind() {
-            Self::NotFound(path.to_path_buf().into())
+            Self::NotFound(path.as_ref().to_path_buf().into())
         } else {
-            Self::Io(Arc::new(e), path.to_path_buf().into())
+            Self::Io(Arc::new(e), path.as_ref().to_path_buf().into())
         }
     }
 }
@@ -90,8 +90,12 @@ impl ParsedXmps {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EditHash(u64);
 
+impl EditHash {
+    pub const NO_EDITS: Self = Self(0);
+}
+
 #[derive(Debug, Clone)]
-pub(crate) struct Xmp {
+pub struct Xmp {
     pub(crate) rating: Option<u8>,
     /// if the edits changed we need to re-export
     // TODO state tracking

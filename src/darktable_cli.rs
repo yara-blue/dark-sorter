@@ -1,21 +1,52 @@
-use std::path::Path;
+use std::sync::LazyLock;
 
 use color_eyre::Section;
-use color_eyre::eyre::{Context, eyre};
+use color_eyre::eyre::{Context, OptionExt, eyre};
 use tokio::process;
 use tokio::sync::Semaphore;
+use uzers::User;
 
-use crate::SourceDir;
+use crate::ImageExporter;
+use crate::fs::{SourceDir, XmpFile};
 use crate::xmp::Xmp;
 
-// TODO limit simultaneous open files in program with semaphore
+pub struct DarktableCli;
+
+impl ImageExporter for DarktableCli {
+    fn export(
+        xmp: &Xmp,
+        xmp_file: &XmpFile,
+        source: &SourceDir,
+    ) -> impl Future<Output = color_eyre::Result<()>> + Send {
+        export(xmp, xmp_file, source)
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 struct StringError(String);
 
+pub fn running_as_root() -> bool {
+    caps::has_cap(
+        None,
+        caps::CapSet::Permitted,
+        caps::Capability::CAP_SYS_ADMIN,
+    )
+    .expect("We should always be able to see if we are sys admin")
+}
+
+fn darktable_user() -> color_eyre::Result<&'static User> {
+    static DARKTABLE_USER: LazyLock<Option<uzers::User>> =
+        LazyLock::new(|| uzers::get_user_by_name("darktable"));
+    DARKTABLE_USER
+        .as_ref()
+        .ok_or_eyre("Could not find user `darktable`")
+        .note("when running as root we need a user darktable to run darktable-cli under")
+        .suggestion("Add a user `darktable`")
+}
+
 /// Globally limit to one file at the time
-pub async fn export(xmp: Xmp, xmp_file: &Path, source: &SourceDir) -> color_eyre::Result<()> {
+pub async fn export(xmp: &Xmp, xmp_file: &XmpFile, source: &SourceDir) -> color_eyre::Result<()> {
     // darktable export is already highly parallel
     static LIMIT_EXPORTS: Semaphore = Semaphore::const_new(1);
 
@@ -26,12 +57,19 @@ pub async fn export(xmp: Xmp, xmp_file: &Path, source: &SourceDir) -> color_eyre
 
     let input_file = source.join(&*xmp.raw);
     let output_file = input_file.with_extension("jpg");
-    let output = process::Command::new("nice")
-        .arg("19")
+
+    let mut export_cmd = process::Command::new("nice");
+    let export_cmd = export_cmd
+        .arg("--adjustment=19")
         .arg("darktable-cli")
         .arg(input_file.as_os_str())
-        .arg(xmp_file.as_os_str())
-        .arg(output_file.as_os_str())
+        .arg(xmp_file.0.as_os_str())
+        .arg(output_file.as_os_str());
+    if running_as_root() {
+        export_cmd.uid(darktable_user()?.uid());
+        export_cmd.gid(darktable_user()?.primary_group_id());
+    }
+    let output = export_cmd
         .output()
         .await
         .wrap_err("Could not spawn darktable-cli export process")?;

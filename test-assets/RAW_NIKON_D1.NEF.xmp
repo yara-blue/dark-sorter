@@ -8,11 +8,11 @@
     xmlns:darktable="http://darktable.sf.net/"
     xmlns:dc="http://purl.org/dc/elements/1.1/"
     xmlns:lr="http://ns.adobe.com/lightroom/1.0/"
-   exif:DateTimeOriginal="2026:05:24 14:28:33.110"
-   xmpMM:DerivedFrom="<FILE_NAME>.NEF"
-   xmp:Rating="3"
-   darktable:import_timestamp="63915220635342006"
-   darktable:change_timestamp="63915229596628739"
+   exif:DateTimeOriginal="2000:11:19 13:01:50.240"
+   xmpMM:DerivedFrom="RAW_NIKON_D1.NEF"
+   xmp:Rating="1"
+   darktable:import_timestamp="63918170767513495"
+   darktable:change_timestamp="-1"
    darktable:export_timestamp="-1"
    darktable:print_timestamp="-1"
    darktable:xmp_version="5"
@@ -20,8 +20,8 @@
    darktable:auto_presets_applied="1"
    darktable:history_end="12"
    darktable:iop_order_version="4"
-   darktable:history_auto_hash="8a530ca5d0cd6692bd9d4955a7a26f3c"
-   darktable:history_current_hash="2f8958861c055a525b33a4ab831283db">
+   darktable:history_auto_hash="b0156cf336c77944d8545d1e948fa516"
+   darktable:history_current_hash="b0156cf336c77944d8545d1e948fa516">
    <darktable:masks_history>
     <rdf:Seq/>
    </darktable:masks_history>
@@ -32,7 +32,7 @@
       darktable:operation="rawprepare"
       darktable:enabled="1"
       darktable:modversion="2"
-      darktable:params="00000000000000000000000000000000f003f003f003f003a03c000000000000"
+      darktable:params="00000000000000000c0000000c0000000000000000000000ff0f000000000000"
       darktable:multi_name=""
       darktable:multi_name_hand_edited="0"
       darktable:multi_priority="0"
@@ -43,7 +43,7 @@
       darktable:operation="demosaic"
       darktable:enabled="1"
       darktable:modversion="6"
-      darktable:params="0000000000000000000000000500000001000000cdcc4c3e00000000713d8a3e00000000080000000000000000000000"
+      darktable:params="0000000000000000000000000500000001000000cdcc4c3e000000005839b43e00000000080000000000000000000000"
       darktable:multi_name=""
       darktable:multi_name_hand_edited="0"
       darktable:multi_priority="0"
@@ -87,7 +87,7 @@
       darktable:operation="temperature"
       darktable:enabled="1"
       darktable:modversion="4"
-      darktable:params="0040e33f0000803f0000a93f0000000004000000"
+      darktable:params="82cc753f0000803fcc3f853f0000000004000000"
       darktable:multi_name=""
       darktable:multi_name_hand_edited="0"
       darktable:multi_priority="0"
@@ -106,10 +106,10 @@
       darktable:blendop_params="gz11eJxjYGBgYARiCQYYOOHEgAZY0QWgejBBgz0Ej1Q+dcF/IADRAGwSHQY="/>
      <rdf:li
       darktable:num="7"
-      darktable:operation="channelmixerrgb"
+      darktable:operation="agx"
       darktable:enabled="1"
-      darktable:modversion="3"
-      darktable:params="gz04eJxjYGiwZ8AAxIqRD5igmAWIGYG45MMuu1XBB+xUSrpcQXYxQuUBq/kIxw=="
+      darktable:modversion="7"
+      darktable:params="gz02eJxjYACBBnsEBgGFgwwMFxzOnjlje0pN2v5NoIWdsbGxAwMUpKUdswfhs2d44GIgvUxQFtvNaXZczIK2+zJb7Bz3rNlT9VbUTl2lcS/M/KUPpoDl/fa0geXZlljbQuQZGAB0ByTd"
       darktable:multi_name="_builtin_scene-referred default"
       darktable:multi_name_hand_edited="0"
       darktable:multi_priority="0"
@@ -117,6 +117,17 @@
       darktable:blendop_params="gz08eJxjYGBgYAFiCQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dlAx68oBEMbFxwX+AwGIBgCbGCeh"/>
      <rdf:li
       darktable:num="8"
+      darktable:operation="channelmixerrgb"
+      darktable:enabled="1"
+      darktable:modversion="3"
+      darktable:params="gz04eJxjYGiwZ8AAxIqRD9iBmAmIWYCYEYgVvQ/a9cbttuubXO0KsosRKg8AnJIIPg=="
+      darktable:multi_name="_builtin_scene-referred default"
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz08eJxjYGBgYAFiCQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dlAx68oBEMbFxwX+AwGIBgCbGCeh"/>
+     <rdf:li
+      darktable:num="9"
       darktable:operation="exposure"
       darktable:enabled="1"
       darktable:modversion="7"
@@ -127,7 +138,7 @@
       darktable:blendop_version="14"
       darktable:blendop_params="gz08eJxjYGBgYAFiCQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dlAx68oBEMbFxwX+AwGIBgCbGCeh"/>
      <rdf:li
-      darktable:num="9"
+      darktable:num="10"
       darktable:operation="flip"
       darktable:enabled="1"
       darktable:modversion="2"
@@ -138,37 +149,25 @@
       darktable:blendop_version="14"
       darktable:blendop_params="gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="/>
      <rdf:li
-      darktable:num="10"
-      darktable:operation="sigmoid"
-      darktable:enabled="1"
-      darktable:modversion="3"
-      darktable:params="0000c03f000000000000c8426c09793c000000000000c8420000000000000000000000000000000000000000000000000000000000000000"
-      darktable:multi_name="_builtin_scene-referred default"
-      darktable:multi_name_hand_edited="0"
-      darktable:multi_priority="0"
-      darktable:blendop_version="14"
-      darktable:blendop_params="gz08eJxjYGBgYAFiCQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dlAx68oBEMbFxwX+AwGIBgCbGCeh"/>
-     <rdf:li
       darktable:num="11"
-      darktable:operation="exposure"
+      darktable:operation="lens"
       darktable:enabled="1"
-      darktable:modversion="7"
-      darktable:params="00000000000080b9e04fcd3f00004842000080c00100000001000000"
-      darktable:multi_name=""
+      darktable:modversion="10"
+      darktable:params="gz07eJxjZGBgYGeAgQZ7Y+PD9gwMCxyNjT87MDBUuTACRf08vf39FFwMGUY0aLDHjWHycGAPxWAAAKjqDfM="
+      darktable:multi_name="default"
       darktable:multi_name_hand_edited="0"
       darktable:multi_priority="0"
       darktable:blendop_version="14"
-      darktable:blendop_params="gz08eJxjYGBgYAFiCQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dlAx68oBEMbFxwX+AwGIBgCbGCeh"/>
+      darktable:blendop_params="gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="/>
     </rdf:Seq>
    </darktable:history>
-   <dc:description>
+   <dc:rights>
     <rdf:Alt>
-     <rdf:li xml:lang="x-default">camera@yara.blue</rdf:li>
+     <rdf:li xml:lang="x-default">Copyright,NIKON CORPORATION,1999</rdf:li>
     </rdf:Alt>
-   </dc:description>
+   </dc:rights>
    <dc:subject>
     <rdf:Bag>
-     <rdf:li>changed</rdf:li>
      <rdf:li>darktable</rdf:li>
      <rdf:li>format</rdf:li>
      <rdf:li>nef</rdf:li>
@@ -176,7 +175,6 @@
    </dc:subject>
    <lr:hierarchicalSubject>
     <rdf:Bag>
-     <rdf:li>darktable|changed</rdf:li>
      <rdf:li>darktable|format|nef</rdf:li>
     </rdf:Bag>
    </lr:hierarchicalSubject>
