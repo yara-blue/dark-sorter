@@ -9,10 +9,11 @@ use color_eyre::Section;
 use color_eyre::eyre::{Context, eyre};
 use fanotify_fid::Fanotify;
 use fanotify_fid::consts::{
-    FAN_CREATE, FAN_DELETE, FAN_MARK_ADD, FAN_MARK_FILESYSTEM, FAN_MODIFY, FAN_MOVE,
-    FAN_MOVED_FROM, FAN_MOVED_TO,
+    FAN_DELETE, FAN_MARK_ADD, FAN_MARK_FILESYSTEM, FAN_MOVED_FROM, FAN_MOVED_TO,
 };
 use fanotify_fid::types::FidEvent;
+use libc::FAN_CLOSE_WRITE;
+use tracing::{debug, instrument};
 
 use crate::ImageExporter;
 use crate::fs::{PreviewFile, PreviewLink, SourceDir, TargetDir, ThrottledFs, XmpFile};
@@ -36,7 +37,7 @@ pub fn start(dir: SourceDir) -> color_eyre::Result<Receiver<Kitty>> {
 
     fan.mark(
         FAN_MARK_ADD | FAN_MARK_FILESYSTEM,
-        FAN_CREATE | FAN_DELETE | FAN_MODIFY | FAN_MOVE,
+        FAN_CLOSE_WRITE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO,
         &dir,
     )
     .wrap_err("Could not mark filesystem for watching")
@@ -58,10 +59,7 @@ pub fn start(dir: SourceDir) -> color_eyre::Result<Receiver<Kitty>> {
     Ok(rx)
 }
 
-fn should_be_linked(xmp: &Xmp) -> bool {
-    xmp.rating.is_some()
-}
-
+#[instrument(skip(source, target, fs))]
 pub async fn handle_kitty_fs_change<Exporter: ImageExporter>(
     event: Kitty,
     source: &SourceDir,
@@ -72,28 +70,19 @@ pub async fn handle_kitty_fs_change<Exporter: ImageExporter>(
         .read_to_string(&event.xmp_file)
         .await
         .map_err(|e| xmp::ReadParseError::from_io(e, &event.xmp_file))?;
-    let xmp = Xmp::from_str(&xmp).map_err(xmp::ReadParseError::Parse)?;
+
     let xmp_path = event.xmp_file;
     let link = xmp_path.link_path(target);
     let preview = xmp_path.preview_path(source);
 
+    debug!("got one");
     match event.event {
-        KittyKind::FileCreated => {
-            if should_be_linked(&xmp) {
-                Exporter::export(&xmp, &xmp_path, source, fs)
-                    .await
-                    .wrap_err("failed to export image")?;
-                fs.symlink(&preview, &link)
-                    .await
-                    .wrap_err("Could not create link")
-                    .with_note(|| format!("link: {} -> {}", link.display(), preview.display()))?;
-            }
-        }
         KittyKind::FileDeleted | KittyKind::FileMovedFrom => {
             clean_up(&link, &preview)?;
         }
-        KittyKind::FileModified => {
-            if should_be_linked(&xmp) {
+        KittyKind::FileModificationComplete => {
+            let xmp = Xmp::from_str(&xmp).map_err(xmp::ReadParseError::Parse)?;
+            if xmp.rating.is_rated() {
                 Exporter::export(&xmp, &xmp_path, source, fs)
                     .await
                     .wrap_err("failed to export image")?;
@@ -106,7 +95,8 @@ pub async fn handle_kitty_fs_change<Exporter: ImageExporter>(
             }
         }
         KittyKind::FileMovedTo => {
-            if should_be_linked(&xmp) {
+            let xmp = Xmp::from_str(&xmp).map_err(xmp::ReadParseError::Parse)?;
+            if xmp.rating.is_rated() {
                 fs.symlink(&preview, &link)
                     .await
                     .wrap_err("Could not create link")
@@ -156,16 +146,17 @@ fn clean_up(link: &PreviewLink, preview: &PreviewFile) -> Result<(), color_eyre:
     Ok(())
 }
 
+#[derive(Debug)]
 pub struct Kitty {
     xmp_file: XmpFile,
     event: KittyKind,
     pub overflow: bool,
 }
 
+#[derive(Debug)]
 pub enum KittyKind {
-    FileCreated,
+    FileModificationComplete,
     FileDeleted,
-    FileModified,
     FileMovedTo,
     FileMovedFrom,
 }
@@ -178,10 +169,10 @@ fn handle_event(event: &FidEvent, dir: &SourceDir, tx: &Sender<Kitty>) {
         cold_path();
 
         if event.path.starts_with(dir) && event.path.is_file() {
-            if event.mask & FAN_CREATE > 0 {
+            if event.mask & FAN_CLOSE_WRITE > 0 {
                 tx.send(Kitty {
                     xmp_file: XmpFile(event.path.clone()),
-                    event: KittyKind::FileCreated,
+                    event: KittyKind::FileModificationComplete,
                     overflow: event.is_overflow(),
                 })
                 .expect("could not send");
@@ -209,16 +200,6 @@ fn handle_event(event: &FidEvent, dir: &SourceDir, tx: &Sender<Kitty>) {
                     overflow: event.is_overflow(),
                 })
                 .expect("could not send");
-            }
-            if event.mask & FAN_MODIFY > 0 {
-                tx.send(Kitty {
-                    xmp_file: XmpFile(event.path.clone()),
-                    event: KittyKind::FileModified,
-                    overflow: event.is_overflow(),
-                })
-                .expect("could not send");
-            } else {
-                unreachable!("We only subscribed to the above listed events")
             }
         }
     }

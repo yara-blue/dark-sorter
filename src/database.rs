@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
+use crate::fs::XmpFile;
 use crate::watcher::EyreWithPath;
 use crate::xmp;
 use color_eyre::Section;
@@ -14,7 +15,7 @@ use flate2::Compression;
 use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone, Default)]
-pub struct Db(Arc<spin::Mutex<HashMap<PathBuf, xmp::EditHash>>>);
+pub struct Db(Arc<spin::Mutex<HashMap<XmpFile, xmp::EditHash>>>);
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoadDbError {
@@ -42,11 +43,11 @@ impl From<OpenSharedError> for LoadDbError {
 
 impl Db {
     #[must_use]
-    pub fn get(&self, path: &Path) -> Option<xmp::EditHash> {
+    pub fn get(&self, path: &XmpFile) -> Option<xmp::EditHash> {
         self.0.lock().get(path).copied()
     }
 
-    pub fn insert(&self, path: PathBuf, hash: xmp::EditHash) {
+    pub fn insert(&self, path: XmpFile, hash: xmp::EditHash) {
         self.0.lock().insert(path, hash);
     }
 
@@ -67,7 +68,7 @@ impl Db {
             let decompressor = flate2::read::ZlibDecoder::new(file);
 
             let mut buffer = [0; 1024];
-            let (map, _): (HashMap<PathBuf, xmp::EditHash>, _) =
+            let (map, _) =
                 postcard::from_io((decompressor, &mut buffer)).map_err(LoadDbError::DeserComprr)?;
             Ok::<_, LoadDbError>(map)
         });

@@ -2,39 +2,18 @@
 
 # run intreactively using:
 # `nix run .#checks.x86_64-linux.default.driverInteractive`
-
 {
   pkgs,
   nixosModule,
 }:
-pkgs.testers.runNixOSTest {
-  name = "test-name";
-  enableDebugHook = true;
-  sshBackdoor.enable = true;
-  nodes.machine =
-    { ... }:
-    {
-      imports = [ nixosModule ];
-      services.dark-sorter = {
-        enable = true;
-        source-dir = "/source";
-        target-dir = "/target";
-		photo-group = "photos";
-      };
-      system.stateVersion = "25.11";
-    };
-  # Methods available on machine objects:
-  # https://nixos.org/manual/nixos/stable/index.html#ssec-machine-objects
-  testScript = ''
-    machine.succeed("mkdir /source --mode 770")
-    machine.succeed("mkdir /target --mode 770")
-    machine.succeed("chgrp photos /source")
-    machine.succeed("chgrp photos /target")
-    machine.copy_from_host("${./test-assets/RAW_NIKON_D1.NEF}", "/source/RAW_NIKON_D1.NEF")
-    machine.copy_from_host("${./test-assets/RAW_NIKON_D1.NEF.xmp}", "/source/RAW_NIKON_D1.NEF.xmp")
-    machine.wait_for_unit("default.target")
-    machine.wait_for_file("/source/RAW_NIKON_D1.jpg", 20)
-    symlink = machine.wait_until_succeeds("realpath /target/RAW_NIKON_D1.jpg", 2)
-    assert symlink == "/source/RAW_NIKON_D1.jpg"
-  '';
+rec {
+  # module = import ./tests/module.nix {
+  #   pkgs = pkgs;
+  #   nixosModule = nixosModule;
+  # };
+  watcher = import ./tests/watcher.nix {
+    pkgs = pkgs;
+    nixosModule = nixosModule;
+  };
+  # default = module;
 }

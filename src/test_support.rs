@@ -23,10 +23,31 @@ pub enum TestFile {
 }
 
 impl TestFile {
-    fn name(self) -> &'static str {
+    const fn name(self) -> &'static str {
         match self {
             TestFile::A => "a",
         }
+    }
+    fn xmp_file(self, source: &SourceDir) -> XmpFile {
+        XmpFile(
+            source
+                .0
+                .0
+                .join(SUBDIR)
+                .join(self.name())
+                .with_added_extension("NEF")
+                .with_added_extension("xmp"),
+        )
+    }
+    fn jpg_link(self, target: &TargetDir) -> XmpFile {
+        XmpFile(
+            target
+                .0
+                .0
+                .join(SUBDIR)
+                .join(self.name())
+                .with_added_extension("jpg"),
+        )
     }
 }
 
@@ -108,8 +129,8 @@ pub fn empty_dir() -> (TempDir, TargetDir) {
     (dir, TargetDir(Dir(path)))
 }
 
-pub fn assert_symlinked(dir: &TargetDir, test_file: TestFile) {
-    let file = dir.join(SUBDIR).join(test_file).with_extension("jpg");
+pub fn assert_symlinked(target: &TargetDir, test_file: TestFile) {
+    let file = test_file.jpg_link(target);
     let rated_meta = fs::symlink_metadata(&file).expect("After running there should be a symlink");
 
     assert!(rated_meta.file_type().is_symlink());
@@ -120,19 +141,15 @@ pub fn assert_symlinked(dir: &TargetDir, test_file: TestFile) {
     assert!(fs::read_to_string(symlink_target).unwrap() == RATED_PREVIEW_JPEG_CONTENT);
 }
 
-pub fn assert_not_symlinked(dir: &TargetDir, test_file: TestFile) {
-    let file = dir.join(SUBDIR).join(test_file).with_extension("jpg");
+pub fn assert_not_symlinked(target: &TargetDir, test_file: TestFile) {
+    let file = test_file.jpg_link(target);
     let res = fs::symlink_metadata(&file).unwrap_err();
     assert_eq!(res.kind(), ErrorKind::NotFound);
 }
 
 pub fn remove_rating(source: &SourceDir, test_file: TestFile) {
     fs::write(
-        source
-            .join(SUBDIR)
-            .join(test_file)
-            .with_extension("NEF")
-            .with_added_extension("xmp"),
+        test_file.xmp_file(source),
         include_str!("test_support/rated_picture.xmp")
             .replace("xmp:Rating=\"3\"", "xmp:Rating=\"0\""),
     )
@@ -141,11 +158,7 @@ pub fn remove_rating(source: &SourceDir, test_file: TestFile) {
 
 pub fn add_rating(source: &SourceDir, test_file: TestFile) {
     fs::write(
-        source
-            .join(SUBDIR)
-            .join(test_file)
-            .with_extension("NEF")
-            .with_added_extension("xmp"),
+        test_file.xmp_file(source),
         include_str!("test_support/rated_picture.xmp"),
     )
     .unwrap();
@@ -161,8 +174,8 @@ impl ImageExporter for FakeJpgExporter {
         source: &SourceDir,
         fs: &crate::fs::ThrottledFs,
     ) -> color_eyre::Result<()> {
-        let input_file = source.join(&*xmp.raw);
-        let output_file = input_file.with_extension("jpg");
+        let input_file = xmp.raw_file(source);
+        let output_file = input_file.preview_file();
         std::fs::write(&output_file, RATED_PREVIEW_JPEG_CONTENT)
             .wrap_err("Failed to write fake jpeg")
             .note_path(&output_file)?;

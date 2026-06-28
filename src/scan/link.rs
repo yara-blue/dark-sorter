@@ -1,14 +1,14 @@
 use std::collections::HashSet;
 use std::future;
 use std::io::ErrorKind;
-use std::path::Path;
 
 use color_eyre::Section;
 use color_eyre::eyre::Context;
 use futures::TryStreamExt;
 use futures::stream::FuturesUnordered;
+use tracing::instrument;
 
-use crate::fs::{DirFileStem, SourceDir, TargetDir, ThrottledFs};
+use crate::fs::{PreviewLink, SourceDir, TargetDir, ThrottledFs, XmpFile};
 use crate::watcher::EyreWithPath;
 use crate::xmp;
 
@@ -18,12 +18,12 @@ use crate::xmp;
 /// - the corresponding xmp does not exist
 /// - the corresponding xmp does not have a rating for the image
 pub async fn should_remove_link(
-    link: &DirFileStem,
+    link: &PreviewLink,
     source_dir: &SourceDir,
     xmps: &xmp::ParsedXmps,
     fs: &ThrottledFs,
 ) -> color_eyre::Result<bool> {
-    let link_target = match tokio::fs::read_link(link.path()).await {
+    let link_target = match tokio::fs::read_link(link).await {
         Ok(link_target) => link_target,
         // link already got removed
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(false),
@@ -35,23 +35,25 @@ pub async fn should_remove_link(
         return Ok(true);
     }
 
-    let corresponding_xmp = source_dir.join(link.file_stem()).with_extension("xmp");
-    let xmp = match xmps.get_or_read_and_parse(&corresponding_xmp, fs).await {
+    let xmp = match xmps
+        .get_or_read_and_parse(&link.xmp_path(source_dir), fs)
+        .await
+    {
         Ok(xmp) => xmp,
         Err(xmp::ReadParseError::NotFound(_)) => return Ok(true),
         Err(e) => return Err(e).wrap_err("Could not read xmp"),
     };
 
-    if xmp.rating.is_none() {
-        Ok(true)
-    } else {
+    if xmp.rating.is_rated() {
         Ok(false)
+    } else {
+        Ok(true)
     }
 }
 
 pub async fn remove_link_if_stale(
     source_dir: &SourceDir,
-    link: &DirFileStem,
+    link: &PreviewLink,
     xmps: &xmp::ParsedXmps,
     fs: &ThrottledFs,
 ) -> color_eyre::Result<()> {
@@ -59,7 +61,7 @@ pub async fn remove_link_if_stale(
         .await
         .wrap_err("Could not determine whether link should be removed")?
     {
-        tokio::fs::remove_file(link.path())
+        tokio::fs::remove_file(link)
             .await
             .wrap_err("Could not remove symlink")
     } else {
@@ -70,7 +72,7 @@ pub async fn remove_link_if_stale(
 
 pub async fn remove_stale(
     source_dir: &SourceDir,
-    links: impl Iterator<Item = &DirFileStem>,
+    links: impl Iterator<Item = &PreviewLink>,
     xmps: &xmp::ParsedXmps,
     fs: &ThrottledFs,
 ) -> color_eyre::Result<()> {
@@ -81,20 +83,15 @@ pub async fn remove_stale(
         .await
 }
 
+#[instrument(skip_all)]
 pub async fn create_link(
-    xmp_path: &Path,
+    xmp: &XmpFile,
     source_dir: &SourceDir,
     target_dir: &TargetDir,
     fs: &ThrottledFs,
 ) -> color_eyre::Result<()> {
-    // remove .RAW.xmp (with .RAW some raw format like .NEF or .DNG)
-    // TODO refactor, make this nice
-    let mut xmp_path = xmp_path.with_extension("");
-    xmp_path.set_extension("");
-    let name = xmp_path.file_name().expect("DirEntry has a file name");
-
-    let preview = source_dir.join(name).with_extension("jpg");
-    let link = target_dir.join(name).with_extension("jpg");
+    let preview = xmp.preview_path(source_dir);
+    let link = xmp.link_path(target_dir);
 
     fs.symlink(&preview, &link)
         .await
@@ -103,7 +100,7 @@ pub async fn create_link(
 }
 
 async fn should_be_linked(
-    xmp_file: &Path,
+    xmp_file: &XmpFile,
     xmps: &xmp::ParsedXmps,
     fs: &ThrottledFs,
 ) -> color_eyre::Result<bool> {
@@ -112,29 +109,31 @@ async fn should_be_linked(
         .await
         .wrap_err("Could not read xmp")
         .note_path(xmp_file)?;
-    if xmp.rating.is_some() {
+    if xmp.rating.is_rated() {
         Ok(true)
     } else {
         Ok(false)
     }
 }
 
+#[instrument(skip_all)]
 pub async fn create_new(
-    xmp_files: &[DirFileStem],
-    links: &HashSet<DirFileStem>,
-    target_dir: &TargetDir,
-    source_dir: &SourceDir,
+    xmp_files: &[XmpFile],
+    links: &HashSet<PreviewLink>,
+    target: &TargetDir,
+    source: &SourceDir,
     xmps: &xmp::ParsedXmps,
     fs: &ThrottledFs,
 ) -> color_eyre::Result<()> {
     xmp_files
         .iter()
-        .filter(|xmp| not_already_linked(xmp, links))
+        .filter(|xmp| not_already_linked(xmp, target, links))
         .map(|xmp| async {
-            if should_be_linked(xmp.path(), xmps, fs).await
+            if should_be_linked(xmp, xmps, fs)
+                .await
                 .wrap_err("Could not determine whether link should be added")?
             {
-                create_link(xmp.path(), source_dir, target_dir, fs).await
+                create_link(xmp, source, target, fs).await
             } else {
                 Ok(())
             }
@@ -144,6 +143,6 @@ pub async fn create_new(
         .await
 }
 
-fn not_already_linked(xmp_file: &DirFileStem, links: &HashSet<DirFileStem>) -> bool {
-    !links.contains(xmp_file)
+fn not_already_linked(xmp: &XmpFile, target: &TargetDir, links: &HashSet<PreviewLink>) -> bool {
+    !links.contains(&xmp.link_path(target))
 }

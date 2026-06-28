@@ -5,6 +5,10 @@ use dark_sorter::{
     watcher,
 };
 use tracing::warn;
+use tracing_error::ErrorLayer;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, fmt};
 
 /// Scans a folder tree and creates a sibling folder structure of
 /// symlinks to jpg previews for all the photos that where rated
@@ -38,7 +42,11 @@ struct Cli {
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
-    tracing_subscriber::fmt().init();
+    tracing_subscriber::registry()
+        .with(fmt::layer().pretty())
+        .with(EnvFilter::from_default_env())
+        .with(ErrorLayer::default())
+        .init();
 
     let cli = Cli::parse();
 
@@ -85,6 +93,7 @@ async fn main() -> color_eyre::Result<()> {
         .await?;
         for event in &event_rx {
             if event.overflow {
+                warn!("watcher overflowed");
                 let _ = event_rx.try_iter().count();
                 break;
             }

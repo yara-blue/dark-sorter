@@ -9,7 +9,7 @@
     xmlns:dc="http://purl.org/dc/elements/1.1/"
     xmlns:lr="http://ns.adobe.com/lightroom/1.0/"
    exif:DateTimeOriginal="2000:11:19 13:01:50.240"
-   xmpMM:DerivedFrom="RAW_NIKON_D1.NEF"
+   xmpMM:DerivedFrom="<FILENAME>.NEF"
    xmp:Rating="1"
    darktable:import_timestamp="63918170767513495"
    darktable:change_timestamp="-1"

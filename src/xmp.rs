@@ -2,17 +2,18 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::ErrorKind;
 use std::num::ParseIntError;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use tokio::sync::Notify;
 
-use crate::fs::ThrottledFs;
+use crate::SourceDir;
+use crate::fs::{PreviewFile, RawFile, ThrottledFs, XmpFile};
 
 /// TODO do similar thing for file metadata
 #[derive(Default)]
-pub(crate) struct ParsedXmps(spin::Mutex<HashMap<PathBuf, XmpState>>);
+pub(crate) struct ParsedXmps(spin::Mutex<HashMap<XmpFile, XmpState>>);
 
 #[derive(Debug, Clone)]
 pub(crate) enum XmpState {
@@ -44,14 +45,13 @@ impl ReadParseError {
 impl ParsedXmps {
     pub(crate) async fn get_or_read_and_parse(
         &self,
-        path: &Path,
+        path: &XmpFile,
         fs: &ThrottledFs,
     ) -> Result<Xmp, ReadParseError> {
         use std::collections::hash_map::Entry;
         let notify = Arc::new(Notify::new());
         let loading = XmpState::Loading(Arc::clone(&notify));
-        let owned_path = path.to_path_buf();
-        let state = match self.0.lock().entry(owned_path) {
+        let state = match self.0.lock().entry(path.clone()) {
             Entry::Occupied(entry) => Some(entry.get().clone()),
             Entry::Vacant(slot) => {
                 slot.insert(loading);
@@ -96,11 +96,27 @@ impl EditHash {
 
 #[derive(Debug, Clone)]
 pub struct Xmp {
-    pub(crate) rating: Option<u8>,
+    pub(crate) rating: Rating,
     /// if the edits changed we need to re-export
-    // TODO state tracking
     pub(crate) edits: Option<EditHash>,
     pub(crate) raw: Arc<str>,
+}
+
+impl Xmp {
+    pub fn preview_file(&self, source: &SourceDir) -> PreviewFile {
+        PreviewFile(self.raw_file(source).0.with_extension("jpg"))
+    }
+
+    pub(crate) fn raw_file(&self, source: &SourceDir) -> RawFile {
+        RawFile(source.0.0.join(&*self.raw))
+    }
+
+    pub fn rated(&self) -> bool {
+        match self.rating {
+            Rating::Rejected | Rating::Unrated => false,
+            Rating::One | Rating::Two | Rating::Three | Rating::Four | Rating::Five => true,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error, Clone)]
@@ -111,7 +127,7 @@ pub enum ParseError {
     NoFieldEnd,
     #[error("The rating was not a number")]
     RatingNotNumber(#[source] ParseIntError),
-    #[error("The rating was not between 0 and 5")]
+    #[error("The XMP spec requires a rating to be between -1 and (including) 5")]
     RatingOutOfRange,
     #[error("Xmp misses the field that lists the raw it describes")]
     NoRawListed,
@@ -123,11 +139,11 @@ impl FromStr for Xmp {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let rating = parse_rating(s)?;
+        let rating = Rating::from_str(s)?;
         let edits = parse_edits(s);
         let raw = parse_raw(s)?;
 
-        Ok(Self { rating, edits, raw })
+        Ok(dbg!(Self { rating, edits, raw }))
     }
 }
 
@@ -159,17 +175,48 @@ pub(crate) fn parse_edits(s: &str) -> Option<EditHash> {
     Some(EditHash(hasher.finish()))
 }
 
-pub(crate) fn parse_rating(s: &str) -> Result<Option<u8>, ParseError> {
-    let start_pattern = r#"xmp:Rating=""#;
-    let rating_start =
-        s.find(start_pattern).ok_or(ParseError::NoRatingStart)? + start_pattern.len();
-    let rating_end = s[rating_start..].find('"').ok_or(ParseError::NoFieldEnd)?;
-    let rating = s[rating_start..rating_start + rating_end]
-        .parse()
-        .map_err(ParseError::RatingNotNumber)?;
-    match rating {
-        0 => Ok(None),
-        1..=5 => Ok(Some(rating)),
-        _ => Err(ParseError::RatingOutOfRange),
+#[derive(Debug, Clone)]
+pub enum Rating {
+    Rejected,
+    Unrated,
+    One,
+    Two,
+    Three,
+    Four,
+    Five,
+}
+
+impl FromStr for Rating {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let start_pattern = "xmp:Rating=\"";
+        let rating_start =
+            s.find(start_pattern).ok_or(ParseError::NoRatingStart)? + start_pattern.len();
+        let rating_end = s[rating_start..].find('"').ok_or(ParseError::NoFieldEnd)?;
+        let rating = s[rating_start..rating_start + rating_end]
+            .parse()
+            .map_err(ParseError::RatingNotNumber)?;
+        Ok(match rating {
+            -1 => Rating::Rejected,
+            0 => Rating::Unrated,
+            1 => Rating::One,
+            2 => Rating::Two,
+            3 => Rating::Three,
+            4 => Rating::Four,
+            5 => Rating::Five,
+            _ => return Err(ParseError::RatingOutOfRange),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_files_parse() {
+        Xmp::from_str(include_str!("../tests/assets/unrated.NEF.xmp")).unwrap();
+        Xmp::from_str(include_str!("../tests/assets/rated.NEF.xmp")).unwrap();
     }
 }

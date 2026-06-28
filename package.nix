@@ -17,6 +17,7 @@ in
 rust.buildRustPackage {
   pname = cargoTOML.package.name;
   version = cargoTOML.package.version;
+  buildType = "debug";
 
   inherit src;
 

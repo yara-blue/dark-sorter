@@ -10,13 +10,14 @@ use futures::{StreamExt, TryStreamExt};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReadDirStream;
 
-use crate::fs::{Dir, DirFileStem, SourceDir, TargetDir, ThrottledFs, XmpFile};
+use crate::fs::{DirName, PreviewLink, SourceDir, TargetDir, ThrottledFs, XmpFile};
 use crate::watcher::{EyreWithPath, ResultExt};
 use crate::xmp::{EditHash, ParsedXmps, Xmp};
 use crate::{ImageExporter, database};
 
 mod link;
 
+#[tracing::instrument(skip_all)]
 pub async fn scan_clean_and_link<Exporter: ImageExporter>(
     source_dir: SourceDir,
     target_dir: TargetDir,
@@ -42,12 +43,12 @@ pub async fn scan_clean_and_link<Exporter: ImageExporter>(
             .wrap_err("Could not get dir entry metadata")
             .with_note(|| format!("entry: {}", entry.path().display()))?;
 
-        let entry = DirFileStem::from(entry);
-
         if meta.is_dir() {
-            dirs.push(entry);
-        } else if meta.is_file() && entry.path().extension().is_some_and(|e| e == "xmp") {
-            xmp_files.push(entry);
+            dirs.push(DirName(entry.file_name()));
+        } else if meta.is_file()
+            && let Ok(xmp) = XmpFile::try_from(entry)
+        {
+            xmp_files.push(xmp);
         }
     }
 
@@ -64,6 +65,7 @@ pub async fn scan_clean_and_link<Exporter: ImageExporter>(
         .note_path(&target_dir)?;
     let mut read_target = ReadDirStream::new(read_target);
     while let Some(res) = read_target.next().await {
+        dbg!(&res);
         let entry = res
             .wrap_err("Could not read target dir entry")
             .with_note(|| format!("dir: {}", source_dir.display()))?;
@@ -72,15 +74,25 @@ pub async fn scan_clean_and_link<Exporter: ImageExporter>(
             .await
             .wrap_err("Could not resolve file type")
             .with_note(|| format!("entry: {}", entry.path().display()))?;
-        let entry = DirFileStem::from(entry);
-        if ty.is_symlink() && entry.path().extension().is_some_and(|e| e == "jpg") {
-            links.insert(entry);
+        if ty.is_symlink()
+            && let Ok(link) = PreviewLink::try_from(entry)
+        {
+            links.insert(link);
         }
+        dbg!(&links);
     }
 
     let recursive_scans = dirs
         .iter()
-        .map(|dir| recurse_into_subdir::<Exporter>(dir, &target_dir, &fs, &previously_exported))
+        .map(|dir| {
+            recurse_into_subdir::<Exporter>(
+                dir,
+                &target_dir,
+                &source_dir,
+                &fs,
+                &previously_exported,
+            )
+        })
         .collect::<FuturesUnordered<_>>()
         .map(|join_result| join_result.wrap_err("A panic occurred").flatten())
         .try_for_each(|()| future::ready(Ok(())));
@@ -100,7 +112,7 @@ pub async fn scan_clean_and_link<Exporter: ImageExporter>(
             &xmp_files,
             &parsed_xmps,
             &source_dir,
-            previously_exported,
+            &previously_exported,
             &fs,
         ),
         recursive_scans,
@@ -112,13 +124,14 @@ pub async fn scan_clean_and_link<Exporter: ImageExporter>(
 // dear rustc gets into a cycle trying to figure out the return type of the tokio::spawn.
 // this little wrapper works around that.
 fn recurse_into_subdir<Exporter: ImageExporter>(
-    dir: &DirFileStem,
+    dir: &DirName,
     target: &TargetDir,
+    source: &SourceDir,
     fs: &ThrottledFs,
     previously_exported: &database::Db,
 ) -> JoinHandle<color_eyre::Result<()>> {
-    let source = SourceDir(Dir(dir.path().to_path_buf()));
-    let target = TargetDir(Dir(target.join(dir.file_stem())));
+    let source = source.subdir(dir);
+    let target = target.subdir(dir);
     let previously_exported = previously_exported.clone();
     let fs = fs.clone();
     tokio::spawn(scan_clean_and_link::<Exporter>(
@@ -130,34 +143,32 @@ fn recurse_into_subdir<Exporter: ImageExporter>(
 }
 
 async fn update_jpg_preview<Exporter: ImageExporter>(
-    xmp_files: &[DirFileStem],
+    xmp_files: &[XmpFile],
     xmps: &ParsedXmps,
     source: &SourceDir,
-    previously_exported: database::Db,
+    previously_exported: &database::Db,
     fs: &ThrottledFs,
 ) -> color_eyre::Result<()> {
     xmp_files
         .iter()
-        .map(|entry| async {
-            let xmp = xmps.get_or_read_and_parse(entry.path(), fs).await?;
+        .cloned()
+        .map(|xmp_file| async move {
+            let xmp = xmps.get_or_read_and_parse(&xmp_file, fs).await?;
             if let Some(current_edits) = xmp.edits
-                && let Some(exported_edits) = previously_exported.get(entry.path())
+                && let Some(exported_edits) = previously_exported.get(&xmp_file)
                 && current_edits != exported_edits
+                && xmp.rated()
             {
-                let xmp_file = XmpFile(entry.as_ref().to_path_buf());
                 Exporter::export(&xmp, &xmp_file, source, fs)
                     .await
                     .wrap_err("failed to update preview")?;
-                previously_exported.insert(entry.path().to_path_buf(), current_edits);
-            } else if preview_missing(&xmp, source).await? {
-                let xmp_file = XmpFile(entry.as_ref().to_path_buf());
+                previously_exported.insert(xmp_file.clone(), current_edits);
+            } else if xmp.rated() && preview_missing(&xmp, source).await? {
                 Exporter::export(&xmp, &xmp_file, source, fs)
                     .await
                     .wrap_err("failed to create preview")?;
-                previously_exported.insert(
-                    entry.path().to_path_buf(),
-                    xmp.edits.unwrap_or(EditHash::NO_EDITS),
-                );
+                previously_exported
+                    .insert(xmp_file.clone(), xmp.edits.unwrap_or(EditHash::NO_EDITS));
             }
             Ok(())
         })
@@ -167,8 +178,7 @@ async fn update_jpg_preview<Exporter: ImageExporter>(
 }
 
 async fn preview_missing(xmp: &Xmp, source: &SourceDir) -> color_eyre::Result<bool> {
-    let input_file = source.join(&*xmp.raw);
-    let preview_path = input_file.with_extension("jpg");
+    let preview_path = xmp.preview_file(source);
     let preview_exists = tokio::fs::try_exists(&preview_path)
         .await
         .wrap_err("Could not check if jpeg exists")

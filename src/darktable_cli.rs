@@ -4,6 +4,7 @@ use color_eyre::Section;
 use color_eyre::eyre::{Context, OptionExt, eyre};
 use tokio::process;
 use tokio::sync::Semaphore;
+use tracing::debug;
 
 use crate::fs::{SourceDir, XmpFile};
 use crate::watcher::EyreWithPath;
@@ -42,15 +43,16 @@ pub async fn export(
         .await
         .expect("static semaphore can not be closed");
 
-    let input_file = source.join(&*xmp.raw);
-    let output_file = input_file.with_extension("jpg");
+    let input_file = xmp.raw_file(source);
+    let output_file = xmp.preview_file(source);
+    debug!("Exporting image: {input_file}");
 
     let output = process::Command::new("nice")
         .arg("--adjustment=19")
         .arg("darktable-cli")
-        .arg(input_file.as_os_str())
-        .arg(xmp_file.0.as_os_str())
-        .arg(output_file.as_os_str())
+        .arg(&input_file)
+        .arg(xmp_file)
+        .arg(&output_file)
         .arg("--core")
         .arg("--library")
         .arg(":memory:") // don't create a darktable library file

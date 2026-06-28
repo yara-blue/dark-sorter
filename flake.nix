@@ -31,13 +31,13 @@
         pkgs = pkgs;
         package = self.packages.x86_64-linux.default;
       };
-      checks.x86_64-linux.default = (import ./tests.nix) {
+      checks.x86_64-linux = (import ./tests.nix) {
         pkgs = pkgs.extend self.overlays.default;
         nixosModule = self.nixosModule;
       };
       overlays.default = final: prev: {
         dark-sorter = self.packages.x86_64-linux.default;
       };
-      nixosModule = import ./nix_module.nix;
+      nixosModule.default = import ./nix_module.nix;
     };
 }

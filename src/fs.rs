@@ -1,4 +1,5 @@
 use std::ffi::OsStr;
+use std::fmt::Display;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -8,6 +9,7 @@ use color_eyre::eyre::{Context, OptionExt};
 use tokio::fs::DirEntry;
 use tokio::io;
 use tokio::sync::Semaphore;
+use tracing::debug;
 
 /// Limit concurrent fs access so we do not exceed the open file handle limit.
 #[derive(Clone)]
@@ -53,8 +55,21 @@ impl ThrottledFs {
         original: impl AsRef<Path>,
         link: impl AsRef<Path>,
     ) -> io::Result<()> {
+        debug!(
+            "Creating symlink: {} -> {}",
+            original.as_ref().display(),
+            link.as_ref().display()
+        );
         tokio::fs::symlink(original, &link).await?;
         std::os::unix::fs::lchown(link, Some(self.user), Some(self.group))
+    }
+}
+
+pub struct DirName(pub std::ffi::OsString);
+
+impl AsRef<Path> for DirName {
+    fn as_ref(&self) -> &Path {
+        self.0.as_ref()
     }
 }
 
@@ -68,9 +83,12 @@ macro_rules! dir_wrapper {
             pub fn display(&self) -> std::path::Display<'_> {
                 self.0.display()
             }
-            #[allow(dead_code)]
-            pub fn join(&self, path: impl AsRef<Path>) -> PathBuf {
-                self.0.join(path)
+            // #[allow(dead_code)]
+            // pub fn join(&self, path: impl AsRef<Path>) -> Self {
+            //     Self(Dir(self.0.join(path)))
+            // }
+            pub fn subdir(&self, dir: &DirName) -> Self {
+                Self(Dir(self.0.0.join(dir)))
             }
         }
         impl AsRef<$wraps> for $name {
@@ -101,8 +119,10 @@ dir_wrapper! {TargetDir, Dir}
 dir_wrapper! {SourceDir, Dir}
 
 macro_rules! path_wrapper {
-    ($name:ident) => {
-        #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+    ($(#[$docs:meta])? $name:ident) => {
+        #[derive(
+            Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+        )]
         pub struct $name(pub PathBuf);
 
         impl $name {
@@ -125,12 +145,73 @@ macro_rules! path_wrapper {
                 &self.0.as_ref()
             }
         }
+        impl Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_fmt(format_args!("{}", self.display()))
+            }
+        }
     };
 }
+
+path_wrapper! {RawFile}
 path_wrapper! {PreviewLink}
 path_wrapper! {PreviewFile}
 path_wrapper! {XmpFile}
-path_wrapper! {Dir}
+path_wrapper! {
+    /// A directory that is not the root
+    Dir
+}
+
+impl RawFile {
+    pub fn preview_file(&self) -> PreviewFile {
+        PreviewFile(self.0.with_extension("jpg"))
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Not path ending in jpg")]
+pub struct NotAPreviewLink;
+
+impl TryFrom<DirEntry> for PreviewLink {
+    type Error = NotAPreviewLink;
+
+    fn try_from(entry: DirEntry) -> Result<Self, Self::Error> {
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "jpg") {
+            Ok(Self(path))
+        } else {
+            Err(NotAPreviewLink)
+        }
+    }
+}
+
+impl PreviewLink {
+    pub fn file_name(&self) -> &OsStr {
+        self.0
+            .file_stem()
+            .expect("A preview has a file name so a link to it has one too")
+    }
+    pub fn xmp_path(&self, source: &SourceDir) -> XmpFile {
+        XmpFile(source.0.0.join(self.file_name()).with_extension("xmp"))
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Not a path ending in xmp")]
+pub struct NotAnXmpFile;
+
+impl TryFrom<DirEntry> for XmpFile {
+    type Error = NotAnXmpFile;
+
+    fn try_from(entry: DirEntry) -> Result<Self, Self::Error> {
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "xmp") {
+            Ok(Self(path))
+        } else {
+            Err(NotAnXmpFile)
+        }
+    }
+}
 
 impl XmpFile {
     pub fn link_path(&self, target: &TargetDir) -> PreviewLink {
@@ -138,7 +219,7 @@ impl XmpFile {
         xmp_path.set_extension("");
         let name = xmp_path.file_name().expect("DirEntry has a file name");
 
-        let link = target.join(name).with_extension("jpg");
+        let link = target.0.0.join(name).with_extension("jpg");
         PreviewLink(link)
     }
 
@@ -147,50 +228,7 @@ impl XmpFile {
         xmp_path.set_extension("");
         let name = xmp_path.file_name().expect("DirEntry has a file name");
 
-        let preview = source.join(name).with_extension("jpg");
+        let preview = source.0.0.join(name).with_extension("jpg");
         PreviewFile(preview)
     }
 }
-
-/// A path that behaves like a file stem in `HashSets` and when compared
-pub struct DirFileStem(PathBuf);
-
-impl AsRef<Path> for DirFileStem {
-    fn as_ref(&self) -> &Path {
-        self.0.as_ref()
-    }
-}
-
-impl From<DirEntry> for DirFileStem {
-    fn from(e: DirEntry) -> Self {
-        let path = e.path();
-        assert!(
-            path.file_stem().is_some(),
-            "dir entries always have a file stem"
-        );
-        DirFileStem(path)
-    }
-}
-
-impl DirFileStem {
-    pub fn path(&self) -> &Path {
-        &self.0
-    }
-    pub fn file_stem(&self) -> &OsStr {
-        self.0.file_stem().expect("checked")
-    }
-}
-
-impl std::hash::Hash for DirFileStem {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.file_stem().expect("checked").hash(state);
-    }
-}
-
-impl PartialEq for DirFileStem {
-    fn eq(&self, other: &DirFileStem) -> bool {
-        self.0.file_stem().expect("checked") == other.0.file_stem().expect("checked")
-    }
-}
-
-impl Eq for DirFileStem {}

@@ -1,4 +1,3 @@
-# Placeholder copied from break-enforcer
 {
   config,
   lib,
@@ -39,7 +38,7 @@ in
   config = mkIf cfg.enable {
     users.users.${cfg.user} = {
       isSystemUser = true;
-	  useDefaultShell = true; # TODO remove
+      useDefaultShell = true; # TODO remove
       description = "User to run darktable under";
       group = "${cfg.photo-group}";
     };
@@ -48,6 +47,10 @@ in
       description = "Maintains a sibling folder structure of symlinks";
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
+      environment = {
+        RUST_BACKTRACE = "full";
+		RUST_LOG = "debug";
+      };
 
       serviceConfig = {
         Type = "simple";
