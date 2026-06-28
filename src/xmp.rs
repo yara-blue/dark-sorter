@@ -139,16 +139,16 @@ pub(crate) fn parse_raw(s: &str) -> Result<Arc<str>, ParseError> {
         .find('"')
         .ok_or(ParseError::NoFieldEnd)?;
     let file_name = &s[file_name_start..file_name_start + file_name_end];
-    if !file_name.contains('.') {
-        Err(ParseError::RawWithoutExtension)
-    } else {
+    if file_name.contains('.') {
         Ok(file_name.to_string().into())
+    } else {
+        Err(ParseError::RawWithoutExtension)
     }
 }
 
 pub(crate) fn parse_edits(s: &str) -> Option<EditHash> {
-    let start_pattern = r#"<darktable:history>"#;
-    let end_pattern = r#"</darktable:history>"#;
+    let start_pattern = r"<darktable:history>";
+    let end_pattern = r"</darktable:history>";
 
     let start = s.find(start_pattern)? + start_pattern.len();
     let end = s[start..].find(end_pattern)?;

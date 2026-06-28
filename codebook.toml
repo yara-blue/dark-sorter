@@ -1,5 +1,6 @@
 words = [
     "bitcode",
+    "configdir",
     "darktable",
     "fanotify",
     "fds",

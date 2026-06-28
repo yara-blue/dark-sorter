@@ -79,7 +79,7 @@ pub async fn scan_clean_and_link<Exporter: ImageExporter>(
     }
 
     let recursive_scans = dirs
-        .into_iter()
+        .iter()
         .map(|dir| recurse_into_subdir::<Exporter>(dir, &target_dir, &fs, &previously_exported))
         .collect::<FuturesUnordered<_>>()
         .map(|join_result| join_result.wrap_err("A panic occurred").flatten())
@@ -112,7 +112,7 @@ pub async fn scan_clean_and_link<Exporter: ImageExporter>(
 // dear rustc gets into a cycle trying to figure out the return type of the tokio::spawn.
 // this little wrapper works around that.
 fn recurse_into_subdir<Exporter: ImageExporter>(
-    dir: DirFileStem,
+    dir: &DirFileStem,
     target: &TargetDir,
     fs: &ThrottledFs,
     previously_exported: &database::Db,
@@ -145,13 +145,13 @@ async fn update_jpg_preview<Exporter: ImageExporter>(
                 && current_edits != exported_edits
             {
                 let xmp_file = XmpFile(entry.as_ref().to_path_buf());
-                Exporter::export(&xmp, &xmp_file, source)
+                Exporter::export(&xmp, &xmp_file, source, fs)
                     .await
                     .wrap_err("failed to update preview")?;
                 previously_exported.insert(entry.path().to_path_buf(), current_edits);
             } else if preview_missing(&xmp, source).await? {
                 let xmp_file = XmpFile(entry.as_ref().to_path_buf());
-                Exporter::export(&xmp, &xmp_file, source)
+                Exporter::export(&xmp, &xmp_file, source, fs)
                     .await
                     .wrap_err("failed to create preview")?;
                 previously_exported.insert(
@@ -169,7 +169,7 @@ async fn update_jpg_preview<Exporter: ImageExporter>(
 async fn preview_missing(xmp: &Xmp, source: &SourceDir) -> color_eyre::Result<bool> {
     let input_file = source.join(&*xmp.raw);
     let preview_path = input_file.with_extension("jpg");
-    let preview_exists = tokio::fs::try_exists(dbg!(&preview_path))
+    let preview_exists = tokio::fs::try_exists(&preview_path)
         .await
         .wrap_err("Could not check if jpeg exists")
         .note_path(preview_path)?;

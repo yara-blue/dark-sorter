@@ -51,7 +51,7 @@ pub fn start(dir: SourceDir) -> color_eyre::Result<Receiver<Kitty>> {
                 .read_events(&mount_fds, &mut buf, None)
                 .expect("could not read fanotify events")
             {
-                handle_event(event, &dir, &tx);
+                handle_event(&event, &dir, &tx);
             }
         }
     });
@@ -80,24 +80,24 @@ pub async fn handle_kitty_fs_change<Exporter: ImageExporter>(
     match event.event {
         KittyKind::FileCreated => {
             if should_be_linked(&xmp) {
-                Exporter::export(&xmp, &xmp_path, source)
+                Exporter::export(&xmp, &xmp_path, source, fs)
                     .await
                     .wrap_err("failed to export image")?;
-                tokio::fs::symlink(&preview, &link)
+                fs.symlink(&preview, &link)
                     .await
                     .wrap_err("Could not create link")
                     .with_note(|| format!("link: {} -> {}", link.display(), preview.display()))?;
             }
         }
-        KittyKind::FileDeleted => {
+        KittyKind::FileDeleted | KittyKind::FileMovedFrom => {
             clean_up(&link, &preview)?;
         }
         KittyKind::FileModified => {
             if should_be_linked(&xmp) {
-                Exporter::export(&xmp, &xmp_path, source)
+                Exporter::export(&xmp, &xmp_path, source, fs)
                     .await
                     .wrap_err("failed to export image")?;
-                tokio::fs::symlink(&preview, &link)
+                fs.symlink(&preview, &link)
                     .await
                     .wrap_err("Could not create link")
                     .with_note(|| format!("link: {} -> {}", link.display(), preview.display()))?;
@@ -105,23 +105,21 @@ pub async fn handle_kitty_fs_change<Exporter: ImageExporter>(
                 clean_up(&link, &preview)?;
             }
         }
-        KittyKind::FileMovedFrom => {
-            clean_up(&link, &preview)?;
-        }
         KittyKind::FileMovedTo => {
             if should_be_linked(&xmp) {
-                tokio::fs::symlink(&preview, &link)
+                fs.symlink(&preview, &link)
                     .await
                     .wrap_err("Could not create link")
                     .with_note(|| format!("link: {} -> {}", link.display(), preview.display()))?;
             }
         }
-    };
+    }
 
     Ok(())
 }
 
 pub trait ResultExt<T, E> {
+    #[must_use]
     fn err_ok_if(self, filter: impl FnOnce(&E) -> bool, val: T) -> Self;
 }
 
@@ -136,6 +134,7 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
 }
 
 pub trait EyreWithPath {
+    #[must_use]
     fn note_path(self, path: impl AsRef<std::path::Path>) -> Self;
 }
 
@@ -171,7 +170,7 @@ pub enum KittyKind {
     FileMovedFrom,
 }
 
-fn handle_event(event: FidEvent, dir: &SourceDir, tx: &Sender<Kitty>) {
+fn handle_event(event: &FidEvent, dir: &SourceDir, tx: &Sender<Kitty>) {
     // Must run fast, gets ran for each file on the mount
     if let Some(ext) = event.path.extension()
         && ext == "xmp"
@@ -220,7 +219,7 @@ fn handle_event(event: FidEvent, dir: &SourceDir, tx: &Sender<Kitty>) {
                 .expect("could not send");
             } else {
                 unreachable!("We only subscribed to the above listed events")
-            };
+            }
         }
     }
 }

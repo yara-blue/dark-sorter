@@ -15,8 +15,8 @@ use crate::xmp;
 /// Should remove if link:
 /// - is not pointing to a file
 /// - the symlink does not point to a jpg
-/// - the corresponding_xmp does not exist
-/// - the corresponding_xmp does not have a rating for the image
+/// - the corresponding xmp does not exist
+/// - the corresponding xmp does not have a rating for the image
 pub async fn should_remove_link(
     link: &DirFileStem,
     source_dir: &SourceDir,
@@ -85,6 +85,7 @@ pub async fn create_link(
     xmp_path: &Path,
     source_dir: &SourceDir,
     target_dir: &TargetDir,
+    fs: &ThrottledFs,
 ) -> color_eyre::Result<()> {
     // remove .RAW.xmp (with .RAW some raw format like .NEF or .DNG)
     // TODO refactor, make this nice
@@ -95,7 +96,7 @@ pub async fn create_link(
     let preview = source_dir.join(name).with_extension("jpg");
     let link = target_dir.join(name).with_extension("jpg");
 
-    tokio::fs::symlink(dbg!(&preview), dbg!(&link))
+    fs.symlink(&preview, &link)
         .await
         .wrap_err("Could not create link")
         .with_note(|| format!("link: {} -> {}", link.display(), preview.display()))
@@ -128,12 +129,12 @@ pub async fn create_new(
 ) -> color_eyre::Result<()> {
     xmp_files
         .iter()
-        .filter(|xmp| dbg!(not_already_linked(xmp, links)))
+        .filter(|xmp| not_already_linked(xmp, links))
         .map(|xmp| async {
-            if dbg!(should_be_linked(xmp.path(), xmps, fs).await)
+            if should_be_linked(xmp.path(), xmps, fs).await
                 .wrap_err("Could not determine whether link should be added")?
             {
-                create_link(xmp.path(), source_dir, target_dir).await
+                create_link(xmp.path(), source_dir, target_dir, fs).await
             } else {
                 Ok(())
             }

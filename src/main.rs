@@ -1,7 +1,10 @@
 use clap::{Parser, ValueHint};
+use color_eyre::eyre::OptionExt;
 use dark_sorter::{
-    DarktableCli, Db, SourceDir, TargetDir, ThrottledFs, scan_clean_and_link, watcher,
+    DarktableCli, Db, SourceDir, TargetDir, ThrottledFs, running_as_root, scan_clean_and_link,
+    watcher,
 };
+use tracing::warn;
 
 /// Scans a folder tree and creates a sibling folder structure of
 /// symlinks to jpg previews for all the photos that where rated
@@ -17,7 +20,17 @@ struct Cli {
     #[arg(short, long, value_hint=ValueHint::DirPath)]
     target_dir: TargetDir,
 
-    /// Maintain the state post scanning?
+    /// User that will create the files.
+    /// Defaults to the current user if not set
+    #[arg(short, long, value_hint=ValueHint::Username)]
+    user: Option<String>,
+
+    /// Group for the files created by dark sorter.
+    /// Defaults to the current users group
+    #[arg(short, long)]
+    photo_group: Option<String>,
+
+    /// Watch files after scan, requires dark-sorter to run as root.
     #[arg(short, long)]
     daemon: bool,
 }
@@ -25,10 +38,29 @@ struct Cli {
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
+    tracing_subscriber::fmt().init();
 
     let cli = Cli::parse();
 
-    let fs = ThrottledFs::new()?;
+    let user = if let Some(name) = cli.user {
+        uzers::get_user_by_name(&name)
+            .ok_or_eyre("User not found on system")?
+            .uid()
+    } else {
+        uzers::get_current_uid()
+    };
+    let group = if let Some(name) = cli.photo_group {
+        uzers::get_group_by_name(&name)
+            .ok_or_eyre("Group not found on system")?
+            .gid()
+    } else {
+        if running_as_root() {
+            warn!("Links will only be readable by the root user");
+        }
+        uzers::get_current_gid()
+    };
+
+    let fs = ThrottledFs::new(user, group)?;
     let db = Db::load_from_default_dir_or_create().await?;
     scan_clean_and_link::<DarktableCli>(
         cli.source_dir.clone(),
@@ -51,7 +83,7 @@ async fn main() -> color_eyre::Result<()> {
             db.clone(),
         )
         .await?;
-        for event in event_rx.iter() {
+        for event in &event_rx {
             if event.overflow {
                 let _ = event_rx.try_iter().count();
                 break;

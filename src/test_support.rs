@@ -44,18 +44,22 @@ pub struct SourceDirBuilder {
 }
 
 impl SourceDirBuilder {
+    #[must_use]
     pub fn with_rated(mut self, files: impl IntoIterator<Item = TestFile>) -> Self {
         self.rated.extend(files);
         self
     }
+    #[must_use]
     pub fn with_preview(mut self, files: impl IntoIterator<Item = TestFile>) -> Self {
         self.preview.extend(files);
         self
     }
+    #[must_use]
     pub fn with_unrated(mut self, files: impl IntoIterator<Item = TestFile>) -> Self {
         self.unrated.extend(files);
         self
     }
+    #[must_use]
     pub fn build(self) -> (TempDir, SourceDir) {
         assert_eq!(self.unrated.intersection(&self.rated).count(), 0);
 
@@ -97,6 +101,7 @@ impl SourceDirBuilder {
     }
 }
 
+#[must_use]
 pub fn empty_dir() -> (TempDir, TargetDir) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().to_path_buf();
@@ -154,13 +159,15 @@ impl ImageExporter for FakeJpgExporter {
         xmp: &Xmp,
         _: &XmpFile,
         source: &SourceDir,
+        fs: &crate::fs::ThrottledFs,
     ) -> color_eyre::Result<()> {
         let input_file = source.join(&*xmp.raw);
         let output_file = input_file.with_extension("jpg");
-        dbg!(&output_file);
         std::fs::write(&output_file, RATED_PREVIEW_JPEG_CONTENT)
             .wrap_err("Failed to write fake jpeg")
-            .note_path(output_file)
+            .note_path(&output_file)?;
+        std::os::unix::fs::chown(output_file, Some(fs.user), Some(fs.group))
+            .wrap_err("Failed to set user and group for fake jpg file")
     }
 }
 
@@ -195,5 +202,5 @@ pub fn single_threaded_sudo_test_setup() -> MutexGuard<'static, ()> {
 
 pub fn test_setup() {
     static INIT_ERR_REPORTING: Once = Once::new();
-    INIT_ERR_REPORTING.call_once(|| color_eyre::install().unwrap())
+    INIT_ERR_REPORTING.call_once(|| color_eyre::install().unwrap());
 }

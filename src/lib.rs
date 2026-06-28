@@ -1,3 +1,6 @@
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::missing_errors_doc)]
+
 // #[cfg(feature = "test_support")]
 pub mod test_support;
 
@@ -23,5 +26,16 @@ pub trait ImageExporter: 'static {
         xmp: &Xmp,
         xmp_file: &XmpFile,
         source: &SourceDir,
+        fs: &fs::ThrottledFs,
     ) -> impl Future<Output = color_eyre::Result<()>> + Send;
+}
+
+#[must_use]
+pub fn running_as_root() -> bool {
+    caps::has_cap(
+        None,
+        caps::CapSet::Permitted,
+        caps::Capability::CAP_SYS_ADMIN,
+    )
+    .expect("We should always be able to see if we are sys admin")
 }

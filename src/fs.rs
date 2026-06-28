@@ -13,18 +13,28 @@ use tokio::sync::Semaphore;
 #[derive(Clone)]
 pub struct ThrottledFs {
     file_limit: Arc<Semaphore>,
+    pub(crate) user: u32,
+    pub(crate) group: u32,
 }
 
 impl ThrottledFs {
-    pub fn new() -> color_eyre::Result<Self> {
+    // #[cfg(test_support)]
+    pub fn for_testing() -> Result<ThrottledFs, color_eyre::eyre::Error> {
+        Self::new(uzers::get_current_uid(), uzers::get_current_gid())
+    }
+    pub fn new(user: u32, group: u32) -> color_eyre::Result<Self> {
         let limit_plus_one = rlimit::Resource::NOFILE
             .get_soft()
             .wrap_err("Could not get max number of file handles form the OS")?;
         let limit = limit_plus_one
             .checked_sub(10) // I know makes now sense but mrrow :3
-            .ok_or_eyre("OS file handle limit too low")?;
+            .ok_or_eyre("OS file handle limit too low")?
+            .try_into()
+            .expect("file limit cannot be larger then usize");
         Ok(Self {
-            file_limit: Arc::new(Semaphore::new(limit as usize)),
+            file_limit: Arc::new(Semaphore::new(limit)),
+            user,
+            group,
         })
     }
 
@@ -36,6 +46,15 @@ impl ThrottledFs {
     pub async fn read_dir(&self, dir: impl AsRef<Dir>) -> io::Result<tokio::fs::ReadDir> {
         let _permit = self.file_limit.acquire().await;
         tokio::fs::read_dir(&dir.as_ref().0).await
+    }
+
+    pub async fn symlink(
+        &self,
+        original: impl AsRef<Path>,
+        link: impl AsRef<Path>,
+    ) -> io::Result<()> {
+        tokio::fs::symlink(original, &link).await?;
+        std::os::unix::fs::lchown(link, Some(self.user), Some(self.group))
     }
 }
 
@@ -133,7 +152,7 @@ impl XmpFile {
     }
 }
 
-/// A path that behaves like a file stem in HashSets and when compared
+/// A path that behaves like a file stem in `HashSets` and when compared
 pub struct DirFileStem(PathBuf);
 
 impl AsRef<Path> for DirFileStem {

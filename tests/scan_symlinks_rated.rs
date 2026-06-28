@@ -17,7 +17,7 @@ fn rated_files_get_symlinked() {
     // let mut _t_guard = _t_guard;
     // _t_guard.disable_cleanup(true);
 
-    let fs = dark_sorter::ThrottledFs::new().unwrap();
+    let fs = dark_sorter::ThrottledFs::for_testing().unwrap();
     let cache = dark_sorter::Db::default();
     Runtime::new()
         .unwrap()
@@ -47,7 +47,7 @@ fn missing_jpeg_gets_created() {
     let mut _t_guard = _t_guard;
     _t_guard.disable_cleanup(true);
 
-    let fs = dark_sorter::ThrottledFs::new().unwrap();
+    let fs = dark_sorter::ThrottledFs::for_testing().unwrap();
     let cache = dark_sorter::Db::default();
     Runtime::new()
         .unwrap()

@@ -21,7 +21,7 @@ fn removing_rating_removes_symlink() {
     test_support::remove_rating(&source, TestFile::A);
 
     thread::sleep(Duration::from_millis(100));
-    let fs = dark_sorter::ThrottledFs::new().unwrap();
+    let fs = dark_sorter::ThrottledFs::for_testing().unwrap();
     for event in rx.try_iter() {
         Runtime::new()
             .unwrap()
@@ -50,7 +50,7 @@ fn adding_rating_adds_symlink() {
     test_support::add_rating(&source, TestFile::A);
 
     thread::sleep(Duration::from_millis(100));
-    let fs = dark_sorter::ThrottledFs::new().unwrap();
+    let fs = dark_sorter::ThrottledFs::for_testing().unwrap();
     for event in rx.try_iter() {
         Runtime::new()
             .unwrap()

@@ -35,7 +35,7 @@ rust.buildRustPackage {
   };
 
   postInstall = ''
-    wrapProgram $out/bin/dark-sorter --prefix PATH: ${
+    wrapProgram $out/bin/dark-sorter --prefix PATH : ${
       pkgs.lib.makeBinPath [
         pkgs.darktable # for darktable-cli
         pkgs.coreutils # for nice

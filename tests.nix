@@ -15,22 +15,21 @@ pkgs.testers.runNixOSTest {
     { ... }:
     {
       imports = [ nixosModule ];
-      users.users.alice = {
-        isNormalUser = true;
-        extraGroups = [ "wheel" ];
-      };
       services.dark-sorter = {
         enable = true;
         source-dir = "/source";
         target-dir = "/target";
+		photo-group = "photos";
       };
       system.stateVersion = "25.11";
     };
   # Methods available on machine objects:
   # https://nixos.org/manual/nixos/stable/index.html#ssec-machine-objects
   testScript = ''
-    machine.succeed("mkdir /source")
-    machine.succeed("mkdir /target")
+    machine.succeed("mkdir /source --mode 770")
+    machine.succeed("mkdir /target --mode 770")
+    machine.succeed("chgrp photos /source")
+    machine.succeed("chgrp photos /target")
     machine.copy_from_host("${./test-assets/RAW_NIKON_D1.NEF}", "/source/RAW_NIKON_D1.NEF")
     machine.copy_from_host("${./test-assets/RAW_NIKON_D1.NEF.xmp}", "/source/RAW_NIKON_D1.NEF.xmp")
     machine.wait_for_unit("default.target")

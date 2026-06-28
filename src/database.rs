@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use crate::darktable_cli::running_as_root;
 use crate::watcher::EyreWithPath;
 use crate::xmp;
 use color_eyre::Section;
@@ -42,6 +41,7 @@ impl From<OpenSharedError> for LoadDbError {
 }
 
 impl Db {
+    #[must_use]
     pub fn get(&self, path: &Path) -> Option<xmp::EditHash> {
         self.0.lock().get(path).copied()
     }
@@ -55,9 +55,7 @@ impl Db {
         match Self::load_from_file(path.clone()).await {
             Ok(db) => Ok(db),
             Err(LoadDbError::NotFound) => Ok(Self::default()),
-            Err(other) => Err(other)
-                .wrap_err("Could not load db")
-                .note_path(path),
+            Err(other) => Err(other).wrap_err("Could not load db").note_path(path),
         }
     }
 
@@ -114,7 +112,7 @@ impl Db {
 }
 
 fn setup_db_file_path() -> color_eyre::Result<PathBuf> {
-    let dir = if running_as_root() {
+    let dir = if crate::running_as_root() {
         Path::new("/var/cache").to_path_buf()
     } else {
         dirs::data_local_dir().wrap_err("Could not get user data dir")?
@@ -151,7 +149,7 @@ fn open_db_file_read_only(path: &Path, timeout: Duration) -> Result<File, OpenSh
 
     while now.elapsed() < timeout {
         match std::fs::File::try_lock_shared(&file) {
-            Ok(_) => return Ok(file),
+            Ok(()) => return Ok(file),
             Err(fs::TryLockError::WouldBlock) => {
                 sleep(Duration::from_millis(50));
             }
@@ -177,7 +175,7 @@ fn open_db_file_writable(path: &Path, timeout: Duration) -> Result<File, OpenSha
 
     while now.elapsed() < timeout {
         match std::fs::File::try_lock(&file) {
-            Ok(_) => return Ok(file),
+            Ok(()) => return Ok(file),
             Err(fs::TryLockError::WouldBlock) => {
                 sleep(Duration::from_millis(50));
             }
