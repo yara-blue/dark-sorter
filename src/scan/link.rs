@@ -6,7 +6,7 @@ use color_eyre::Section;
 use color_eyre::eyre::Context;
 use futures::TryStreamExt;
 use futures::stream::FuturesUnordered;
-use tracing::instrument;
+use tracing::{debug, instrument};
 
 use crate::fs::{PreviewLink, SourceDir, TargetDir, ThrottledFs, XmpFile};
 use crate::watcher::EyreWithPath;
@@ -17,6 +17,7 @@ use crate::xmp;
 /// - the symlink does not point to a jpg
 /// - the corresponding xmp does not exist
 /// - the corresponding xmp does not have a rating for the image
+#[instrument(skip(source_dir, fs))]
 pub async fn should_remove_link(
     link: &PreviewLink,
     source_dir: &SourceDir,
@@ -25,8 +26,11 @@ pub async fn should_remove_link(
 ) -> color_eyre::Result<bool> {
     let link_target = match tokio::fs::read_link(link).await {
         Ok(link_target) => link_target,
-        // link already got removed
-        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(false),
+        // Link points to nothing, remove it.
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            debug!("Link is stale");
+            return Ok(true);
+        }
         Err(e) => return Err(e).wrap_err("Could not resolve link"),
     };
 
@@ -35,15 +39,27 @@ pub async fn should_remove_link(
         return Ok(true);
     }
 
-    let xmp = match xmps.cached_or_parse(&link.xmp_path(source_dir), fs).await {
+    let xmp = match xmps
+        .get_cached_or_read_from_file(&link.xmp_path(source_dir), fs)
+        .await
+    {
         Ok(xmp) => xmp,
-        Err(xmp::ReadParseError::NotFound(_)) => return Ok(true),
+        Err(xmp::XmpError::NotFound(_)) => {
+            debug!("No known xmp corresponding with link");
+            return Ok(true);
+        }
         Err(e) => return Err(e).wrap_err("Could not read xmp"),
     };
 
-    if xmp.rated() { Ok(false) } else { Ok(true) }
+    if xmp.rated() {
+        debug!("Link to unrated file");
+        Ok(false)
+    } else {
+        Ok(true)
+    }
 }
 
+#[tracing::instrument(skip(xmps, fs))]
 pub async fn remove_link_if_stale(
     source_dir: &SourceDir,
     link: &PreviewLink,
@@ -54,6 +70,7 @@ pub async fn remove_link_if_stale(
         .await
         .wrap_err("Could not determine whether link should be removed")?
     {
+        debug!("removing stale link");
         tokio::fs::remove_file(link)
             .await
             .wrap_err("Could not remove symlink")
@@ -98,7 +115,7 @@ async fn should_be_linked(
     fs: &ThrottledFs,
 ) -> color_eyre::Result<bool> {
     let xmp = xmps
-        .cached_or_parse(xmp_file, fs)
+        .get_cached_or_read_from_file(xmp_file, fs)
         .await
         .wrap_err("Could not read xmp")
         .note_path(xmp_file)?;

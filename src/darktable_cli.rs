@@ -1,3 +1,4 @@
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use color_eyre::Section;
@@ -6,8 +7,8 @@ use tokio::process;
 use tokio::sync::Semaphore;
 use tracing::debug;
 
-use crate::fs::{SourceDir, XmpFile};
-use crate::watcher::EyreWithPath;
+use crate::fs::{MetadataExtExt, PreviewFile, RawFile, SourceDir, XmpFile};
+use crate::watcher::{EyreWithPath, ResultExt};
 use crate::xmp::Xmp;
 use crate::{ImageExporter, ThrottledFs};
 
@@ -47,6 +48,8 @@ pub async fn export(
     let output_file = xmp.preview_file(source);
     debug!("Exporting image: {input_file}");
 
+    asses_file_state(&input_file, &output_file, fs).await?;
+
     let output = process::Command::new("nice")
         .arg("--adjustment=19")
         .arg("darktable-cli")
@@ -77,6 +80,56 @@ pub async fn export(
             .with_note(|| format!("output_file: {}", output_file.display()))
             .with_note(|| format!("xmp_file: {}", xmp_file.display()))
     }
+}
+
+/// Darktable-cli's errors are not super helpful when im eepy. Let's give future
+/// me some nice errors instead.
+async fn asses_file_state(
+    input_file: &RawFile,
+    output_file: &PreviewFile,
+    fs: &ThrottledFs,
+) -> color_eyre::Result<()> {
+    let input = fs
+        .metadata(input_file)
+        .await
+        .wrap_err("Could not check input file")
+        .note_path(input_file)?;
+    if !input.is_file() {
+        return Err(eyre!("Not a file")).note_path(input_file)?;
+    }
+
+    let readable = input.user_can_read(fs.user) || input.group_can_read(fs.group);
+    if !readable {
+        return Err(eyre!(
+            "The darktable-cli user has no permission to read the file"
+        ))
+        .note_path(input_file)
+        .suggestion("Change the files permissions or ownership")
+        .suggestion("Ensure dark-sorter is set up to use the correct user")?;
+    }
+
+    let Some(output) = fs
+        .metadata(output_file)
+        .await
+        .map(Some)
+        .ignore_err_if(|e| e.kind() == ErrorKind::NotFound, None)
+        .wrap_err("Could not check existing output file")
+        .note_path(output_file)?
+    else {
+        return Ok(());
+    };
+
+    let writable = output.user_can_write(fs.user) || output.group_can_write(fs.group);
+    if !writable {
+        return Err(eyre!(
+            "The darktable-cli user has no permission to write to the file"
+        ))
+        .note_path(input_file)
+        .suggestion("Change the files permissions or ownership")
+        .suggestion("Ensure dark-sorter is set up to use the correct user")?;
+    }
+
+    Ok(())
 }
 
 fn darktable_home(fs: &ThrottledFs) -> color_eyre::Result<PathBuf> {

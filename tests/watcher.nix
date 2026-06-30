@@ -2,12 +2,18 @@
   pkgs,
   nixosModule,
 }:
+
 pkgs.testers.runNixOSTest {
-  name = "test-name";
+  name = "Watcher";
   enableDebugHook = true;
   sshBackdoor.enable = true;
   nodes.machine =
     { ... }:
+    let
+      helpers = import ./helpers.nix;
+      raw = helpers.raw;
+      xmp = helpers.xmp;
+    in
     {
       imports = [ nixosModule.default ];
       services.dark-sorter = {
@@ -15,69 +21,45 @@ pkgs.testers.runNixOSTest {
         source-dir = "/source";
         target-dir = "/target";
         photo-group = "photos";
+        package = pkgs.dark-sorter-debug;
       };
-	  systemd.services.dark-sorter.wantedBy = pkgs.lib.mkForce [ ];
+      systemd.tmpfiles.rules = [
+        "d /source 770 root photos - -"
+        "d /target 770 root photos - -"
+
+        "C /rated.NEF 770 root photos - ${raw}"
+        "C /rated.NEF.xmp 770 root photos - ${xmp "rated" 4}"
+        "C /starts_unrated.NEF 770 root photos - ${raw}"
+        "C /starts_unrated.NEF.xmp 770 root photos - ${xmp "starts_unrated" 0}"
+      ];
       system.stateVersion = "25.11";
     };
   # Methods available on machine objects:
   # https://nixos.org/manual/nixos/stable/index.html#ssec-machine-objects
   testScript = ''
-from time import sleep
+    from time import sleep
 
-# setup
-machine.succeed("mkdir /source --mode 770")
-machine.succeed("mkdir /target --mode 770")
-machine.succeed("chgrp photos /source")
-machine.succeed("chgrp photos /target")
+    # setup
+    machine.wait_for_unit("default.target")
 
-# rated file already in place at start (scan should detect this one)
-machine.copy_from_host("${./assets/small_raw.NEF}", "/source/a.NEF")
-machine.copy_from_host("${./assets/rated.NEF.xmp}", "/source/a.NEF.xmp")
-machine.succeed("sed -i 's/<FILENAME>/a/' /source/a.NEF.xmp")
+    # TEST 1: watcher notices new files
+    machine.succeed("mv /rated.NEF /source/rated.NEF")
+    machine.succeed("mv /rated.NEF.xmp /source/rated.NEF.xmp")
+    machine.wait_for_file("/source/rated.jpg", 20)
+    symlink = machine.wait_until_succeeds("realpath /target/rated.jpg", 2)
+    assert symlink.strip() == "/source/rated.jpg", f"symlink to {symlink} instead of source/rated.jpg"
 
-# rated file that will be moved in (new files).
-machine.copy_from_host("${./assets/small_raw.NEF}", "/b.NEF")
-machine.copy_from_host("${./assets/rated.NEF.xmp}", "/b.NEF.xmp")
-machine.succeed("sed -i 's/<FILENAME>/b/' /b.NEF.xmp")
+    # TEST 2: watcher notices file getting rated
+    machine.succeed("mv /starts_unrated.NEF /source/starts_unrated.NEF")
+    machine.succeed("mv /starts_unrated.NEF.xmp /source/starts_unrated.NEF.xmp")
+    machine.succeed("sed -i 's/xmp:Rating=\"0\"/xmp:Rating=\"4\"/' /source/starts_unrated.NEF.xmp")
+    machine.wait_for_file("/source/starts_unrated.jpg", 20)
+    symlink = machine.wait_until_succeeds("realpath /target/starts_unrated.jpg", 2)
+    assert symlink.strip() == "/source/starts_unrated.jpg"
 
-# unrated file already in place at start (scan should skip)
-machine.copy_from_host("${./assets/small_raw.NEF}", "/source/c.NEF")
-machine.copy_from_host("${./assets/unrated.NEF.xmp}", "/source/c.NEF.xmp")
-machine.succeed("sed -i 's/<FILENAME>/c/' /source/c.NEF.xmp")
-
-
-machine.wait_for_unit("default.target")
-machine.systemctl("start dark-sorter")
-
-# # TEST 1: scan creates needed links and previews
-# machine.wait_for_file("/source/a.jpg", 20)
-# symlink = machine.wait_until_succeeds("realpath /target/a.jpg", 2)
-# assert symlink == "/source/a.jpg"
-sleep(5)
-
-
-# TEST 2: watcher notices new files
-machine.succeed("mv /b.NEF /source/b.NEF")
-machine.succeed("mv /b.NEF.xmp /source/b.NEF.xmp")
-machine.wait_for_file("/source/b.jpg", 20)
-symlink = machine.wait_until_succeeds("realpath /target/b.jpg", 2)
-assert symlink.strip() == "/source/b.jpg", f"symlink to {symlink} instead of source/b.jpg"
-
-# TEST 3: watcher notices file getting rated
-machine.fail("test -f /source/c.jpg")
-machine.succeed("sed -i 's/xmp:Rating=\"0\"/xmp:Rating=\"4\"/' /source/c.NEF.xmp")
-machine.wait_for_file("/source/c.jpg", 20)
-symlink = machine.wait_until_succeeds("realpath /target/c.jpg", 2)
-print("hiiii")
-print(symlink)
-assert symlink.strip() == "/source/c.jpg"
-
-# TEST 4: watcher notices file rating getting removed
-print("hiiii1")
-machine.succeed("sed -i 's/xmp:Rating=\"4\"/xmp:Rating=\"0\"/' /source/c.NEF.xmp")
-print("hiiii2")
-sleep(1)
-print("hiiii3")
-machine.fail("test -f /source/c.jpg")
-'';
-    }
+    # TEST 3: watcher notices file rating getting removed
+    machine.succeed("sed -i 's/xmp:Rating=\"4\"/xmp:Rating=\"0\"/' /source/starts_unrated.NEF.xmp")
+    sleep(1)
+    machine.fail("test -f /source/starts_unrated.jpg")
+  '';
+}

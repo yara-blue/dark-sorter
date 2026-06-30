@@ -17,12 +17,30 @@ use crate::{ImageExporter, database};
 
 mod link;
 
-#[tracing::instrument(skip_all)]
 pub async fn scan_clean_and_link<Exporter: ImageExporter>(
     source_dir: SourceDir,
     target_dir: TargetDir,
     fs: ThrottledFs,
     previously_exported: database::Db,
+) -> color_eyre::Result<()> {
+    let parsed_xmps = ParsedXmps::default();
+    scan_clean_and_link_dir::<Exporter>(
+        source_dir,
+        target_dir,
+        fs,
+        previously_exported,
+        parsed_xmps,
+    )
+    .await
+}
+
+#[tracing::instrument(skip(fs, previously_exported))]
+async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
+    source_dir: SourceDir,
+    target_dir: TargetDir,
+    fs: ThrottledFs,
+    previously_exported: database::Db,
+    parsed_xmps: ParsedXmps,
 ) -> color_eyre::Result<()> {
     let read_source = fs
         .read_dir(&source_dir)
@@ -55,7 +73,7 @@ pub async fn scan_clean_and_link<Exporter: ImageExporter>(
     let mut links = HashSet::new();
     tokio::fs::create_dir(&target_dir)
         .await
-        .err_ok_if(|e| e.kind() == ErrorKind::AlreadyExists, ())
+        .ignore_err_if(|e| e.kind() == ErrorKind::AlreadyExists, ())
         .wrap_err("Could not create missing target dir")
         .note_path(&source_dir)?;
     let read_target = fs
@@ -65,7 +83,6 @@ pub async fn scan_clean_and_link<Exporter: ImageExporter>(
         .note_path(&target_dir)?;
     let mut read_target = ReadDirStream::new(read_target);
     while let Some(res) = read_target.next().await {
-        dbg!(&res);
         let entry = res
             .wrap_err("Could not read target dir entry")
             .with_note(|| format!("dir: {}", source_dir.display()))?;
@@ -79,7 +96,6 @@ pub async fn scan_clean_and_link<Exporter: ImageExporter>(
         {
             links.insert(link);
         }
-        dbg!(&links);
     }
 
     let recursive_scans = dirs
@@ -91,13 +107,13 @@ pub async fn scan_clean_and_link<Exporter: ImageExporter>(
                 &source_dir,
                 &fs,
                 &previously_exported,
+                &parsed_xmps,
             )
         })
         .collect::<FuturesUnordered<_>>()
         .map(|join_result| join_result.wrap_err("A panic occurred").flatten())
         .try_for_each(|()| future::ready(Ok(())));
 
-    let parsed_xmps = ParsedXmps::default();
     try_join4(
         link::remove_stale(&source_dir, links.iter(), &parsed_xmps, &fs),
         link::create_new(
@@ -129,16 +145,19 @@ fn recurse_into_subdir<Exporter: ImageExporter>(
     source: &SourceDir,
     fs: &ThrottledFs,
     previously_exported: &database::Db,
+    parsed_xmps: &ParsedXmps,
 ) -> JoinHandle<color_eyre::Result<()>> {
     let source = source.subdir(dir);
     let target = target.subdir(dir);
     let previously_exported = previously_exported.clone();
     let fs = fs.clone();
-    tokio::spawn(scan_clean_and_link::<Exporter>(
+    let parsed_xmps = parsed_xmps.clone();
+    tokio::spawn(scan_clean_and_link_dir::<Exporter>(
         source,
         target,
         fs,
         previously_exported,
+        parsed_xmps,
     ))
 }
 
@@ -153,7 +172,7 @@ async fn update_jpg_preview<Exporter: ImageExporter>(
         .iter()
         .cloned()
         .map(|xmp_file| async move {
-            let xmp = xmps.cached_or_parse(&xmp_file, fs).await?;
+            let xmp = xmps.get_cached_or_read_from_file(&xmp_file, fs).await?;
             if let Some(current_edits) = xmp.edits
                 && let Some(exported_edits) = previously_exported.get(&xmp_file)
                 && current_edits != exported_edits

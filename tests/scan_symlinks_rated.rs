@@ -40,7 +40,7 @@ fn missing_jpeg_gets_created() {
         .with_rated([TestFile::A])
         .build();
     let (_t_guard, target) = test_support::empty_dir();
-    dbg!(&source, &target);
+    // dbg!(&source, &target);
 
     let mut _s_guard = _s_guard;
     _s_guard.disable_cleanup(true);

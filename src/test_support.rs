@@ -135,7 +135,7 @@ pub fn assert_symlinked(target: &TargetDir, test_file: TestFile) {
 
     assert!(rated_meta.file_type().is_symlink());
 
-    let symlink_target = fs::canonicalize(dbg!(file)).unwrap();
+    let symlink_target = fs::canonicalize(file).unwrap();
 
     assert!(symlink_target.is_file());
     assert!(fs::read_to_string(symlink_target).unwrap() == RATED_PREVIEW_JPEG_CONTENT);

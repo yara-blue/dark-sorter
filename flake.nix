@@ -23,9 +23,10 @@
       pkgs = nixpkgs.legacyPackages.x86_64-linux.extend rust-overlay.overlays.default;
     in
     {
-      packages.x86_64-linux.default = (import ./package.nix) {
+      packages.x86_64-linux.default = (import ./package.nix) { pkgs = pkgs; };
+      packages.x86_64-linux.debug = (import ./package.nix) {
         pkgs = pkgs;
-        rust-overlay = rust-overlay;
+        debug = true;
       };
       devShells.x86_64-linux.default = (import ./devshell.nix) {
         pkgs = pkgs;
@@ -33,11 +34,12 @@
       };
       checks.x86_64-linux = (import ./tests.nix) {
         pkgs = pkgs.extend self.overlays.default;
-        nixosModule = self.nixosModule;
+        nixosModule = self.nixosModules;
       };
       overlays.default = final: prev: {
         dark-sorter = self.packages.x86_64-linux.default;
+        dark-sorter-debug = self.packages.x86_64-linux.debug;
       };
-      nixosModule.default = import ./nix_module.nix;
+      nixosModules.default = import ./nix_module.nix;
     };
 }

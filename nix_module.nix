@@ -25,12 +25,13 @@ in
         default = "dark-sorter";
         description = "The user dark-sorter creates files as";
       };
+      package = lib.mkPackageOption pkgs "dark-sorter" { };
       photo-group = mkOption {
         type = types.str;
         description = ''
-          			Group for all the files and links created by dark-sorter. Needs to
-          			have access to the raw and xmp files as well.
-          		'';
+            Group for all the files and links created by dark-sorter. Needs to
+          	have read access to the raw and xmp files and be able to
+            write to the target directory.'';
       };
     };
   };
@@ -43,24 +44,22 @@ in
       group = "${cfg.photo-group}";
     };
     users.groups.${cfg.photo-group} = { };
+    # pkgs.dark-sorter.debug = true; // TODO make this work
+
     systemd.services.dark-sorter = {
       description = "Maintains a sibling folder structure of symlinks";
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
-      environment = {
-        RUST_BACKTRACE = "full";
-		RUST_LOG = "debug";
-      };
 
       serviceConfig = {
         Type = "simple";
         ExecStart = ''
-                              ${pkgs.dark-sorter}/bin/dark-sorter \
-                              --source-dir ${cfg.source-dir} \
-                              --target-dir ${cfg.target-dir} \
-          					--user ${cfg.user} \
-          					--photo-group ${cfg.photo-group} \
-                    		  --daemon
+          ${lib.getExe cfg.package} \
+          --source-dir ${cfg.source-dir} \
+          --target-dir ${cfg.target-dir} \
+          --user ${cfg.user} \
+          --photo-group ${cfg.photo-group} \
+          --daemon
         '';
       };
     };

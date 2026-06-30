@@ -1,11 +1,10 @@
 {
   pkgs,
-  rust-overlay,
+  debug ? true,
   ...
 }:
 
 let
-  # pkgs = pkgs2.extend rust-overlay;
   src = ./.;
   cargoTOML = pkgs.lib.importTOML "${src}/Cargo.toml";
   rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
@@ -17,7 +16,8 @@ in
 rust.buildRustPackage {
   pname = cargoTOML.package.name;
   version = cargoTOML.package.version;
-  buildType = "debug";
+  buildType = if debug then "debug" else "release";
+  dontStrip = debug;
 
   inherit src;
 
@@ -33,6 +33,7 @@ rust.buildRustPackage {
   meta = {
     inherit (cargoTOML.package) description homepage;
     maintainers = cargoTOML.package.authors;
+	mainProgram = cargoTOML.package.name;
   };
 
   postInstall = ''

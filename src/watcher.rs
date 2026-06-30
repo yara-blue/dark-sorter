@@ -1,6 +1,5 @@
 use std::hint::cold_path;
 use std::io::ErrorKind;
-use std::str::FromStr;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
@@ -16,7 +15,7 @@ use libc::FAN_CLOSE_WRITE;
 use tracing::{debug, instrument};
 
 use crate::fs::{PreviewFile, PreviewLink, SourceDir, TargetDir, ThrottledFs, XmpFile};
-use crate::xmp::{self, Xmp};
+use crate::xmp::Xmp;
 use crate::{Db, ImageExporter};
 
 pub fn start(dir: SourceDir) -> color_eyre::Result<Receiver<Kitty>> {
@@ -67,13 +66,11 @@ pub async fn handle_kitty_fs_change<Exporter: ImageExporter>(
     fs: &ThrottledFs,
     db: &Db,
 ) -> color_eyre::Result<()> {
-    let xmp = fs
-        .read_to_string(&event.xmp_file)
-        .await
-        .map_err(|e| xmp::ReadParseError::from_io(e, &event.xmp_file))?;
-    let xmp = Xmp::from_str(&xmp).map_err(xmp::ReadParseError::Parse)?;
-
     let xmp_file = event.xmp_file;
+    let xmp = Xmp::read_from_file(&xmp_file, fs)
+        .await
+        .wrap_err("Could not read xmp file")
+        .note_path(&xmp_file)?;
     let link = xmp_file.link_path(target);
     let preview = xmp_file.preview_path(source);
 
@@ -86,7 +83,7 @@ pub async fn handle_kitty_fs_change<Exporter: ImageExporter>(
         // instead of opening it for writing. So a move to can actually edit
         // the rating.
         KittyKind::FileModificationComplete | KittyKind::FileMovedTo => {
-            if dbg!(xmp.rated()) {
+            if xmp.rated() {
                 if xmp.preview_missing(source).await? || db.get(&xmp_file) != xmp.edits {
                     Exporter::export(&xmp, &xmp_file, source, fs)
                         .await
@@ -97,7 +94,7 @@ pub async fn handle_kitty_fs_change<Exporter: ImageExporter>(
                     .wrap_err("Could not create link")
                     .with_note(|| format!("link: {link} -> {preview}"))?;
             } else {
-                dbg!(clean_up(&link, &preview))?;
+                clean_up(&link, &preview)?;
             }
         }
     }
@@ -107,11 +104,11 @@ pub async fn handle_kitty_fs_change<Exporter: ImageExporter>(
 
 pub trait ResultExt<T, E> {
     #[must_use]
-    fn err_ok_if(self, filter: impl FnOnce(&E) -> bool, val: T) -> Self;
+    fn ignore_err_if(self, filter: impl FnOnce(&E) -> bool, val: T) -> Self;
 }
 
 impl<T, E> ResultExt<T, E> for Result<T, E> {
-    fn err_ok_if(self, filter: impl FnOnce(&E) -> bool, val: T) -> Self {
+    fn ignore_err_if(self, filter: impl FnOnce(&E) -> bool, val: T) -> Self {
         match self {
             Ok(v) => Ok(v),
             Err(e) if filter(&e) => Ok(val),
@@ -131,14 +128,15 @@ impl<T> EyreWithPath for color_eyre::Result<T> {
     }
 }
 
+#[instrument]
 fn clean_up(link: &PreviewLink, preview: &PreviewFile) -> Result<(), color_eyre::eyre::Error> {
-    dbg!(link, preview);
+    debug!("removing file and symlink");
     std::fs::remove_file(link)
-        .err_ok_if(|e| e.kind() == ErrorKind::NotFound, ())
+        .ignore_err_if(|e| e.kind() == ErrorKind::NotFound, ())
         .wrap_err("Could not remove link to preview")
         .note_path(link)?;
     std::fs::remove_file(preview)
-        .err_ok_if(|e| e.kind() == ErrorKind::NotFound, ())
+        .ignore_err_if(|e| e.kind() == ErrorKind::NotFound, ())
         .wrap_err("Could not remove preview jpg")
         .note_path(preview)?;
     Ok(())

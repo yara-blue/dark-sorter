@@ -4,7 +4,7 @@ use dark_sorter::{
     DarktableCli, Db, SourceDir, TargetDir, ThrottledFs, running_as_root, scan_clean_and_link,
     watcher,
 };
-use tracing::warn;
+use tracing::{info, warn};
 use tracing_error::ErrorLayer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -34,6 +34,14 @@ struct Cli {
     #[arg(short, long)]
     photo_group: Option<String>,
 
+    /// Refresh library on this immich instance
+    #[arg(short, long, group = "immich")]
+    immich_url: Option<String>,
+
+    /// API key for th immich instance
+    #[arg(short = 'a', long, group = "immich")]
+    immich_api_key: Option<String>,
+
     /// Watch files after scan, requires dark-sorter to run as root.
     #[arg(short, long)]
     daemon: bool,
@@ -49,6 +57,7 @@ async fn main() -> color_eyre::Result<()> {
         .init();
 
     let cli = Cli::parse();
+    info!("Started dark-sorter");
 
     let user = if let Some(name) = cli.user {
         uzers::get_user_by_name(&name)
@@ -70,19 +79,12 @@ async fn main() -> color_eyre::Result<()> {
 
     let fs = ThrottledFs::new(user, group)?;
     let db = Db::load_from_default_dir_or_create().await?;
-    scan_clean_and_link::<DarktableCli>(
-        cli.source_dir.clone(),
-        cli.target_dir.clone(),
-        fs.clone(),
-        db.clone(),
-    )
-    .await?;
 
-    if !cli.daemon {
-        return Ok(());
-    }
+    let event_rx = cli
+        .daemon
+        .then_some(watcher::start(cli.source_dir.clone())?);
 
-    let event_rx = watcher::start(cli.source_dir.clone())?;
+    let mut first_scan = true;
     loop {
         scan_clean_and_link::<DarktableCli>(
             cli.source_dir.clone(),
@@ -91,7 +93,16 @@ async fn main() -> color_eyre::Result<()> {
             db.clone(),
         )
         .await?;
-        for event in &event_rx {
+
+        let Some(ref event_rx) = event_rx else {
+            break Ok(());
+        };
+        if first_scan {
+            info!("Initially scan complete");
+            first_scan = false;
+        }
+
+        for event in event_rx {
             if event.overflow {
                 warn!("watcher overflowed");
                 let _ = event_rx.try_iter().count();
@@ -105,6 +116,7 @@ async fn main() -> color_eyre::Result<()> {
                 &db,
             )
             .await?;
+            warn!("Filesystem watcher overloaded, re-scanning");
         }
     }
 }

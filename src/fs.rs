@@ -1,11 +1,13 @@
 use std::ffi::OsStr;
 use std::fmt::Display;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use color_eyre::eyre::{Context, OptionExt};
+use std::fs::Metadata;
 use tokio::fs::DirEntry;
 use tokio::io;
 use tokio::sync::Semaphore;
@@ -50,6 +52,10 @@ impl ThrottledFs {
         tokio::fs::read_dir(&dir.as_ref().0).await
     }
 
+    pub async fn metadata(&self, path: impl AsRef<Path>) -> io::Result<Metadata> {
+        tokio::fs::metadata(path).await
+    }
+
     pub async fn symlink(
         &self,
         original: impl AsRef<Path>,
@@ -57,8 +63,8 @@ impl ThrottledFs {
     ) -> io::Result<()> {
         debug!(
             "Creating symlink: {} -> {}",
-            original.as_ref().display(),
-            link.as_ref().display()
+            link.as_ref().display(),
+            original.as_ref().display()
         );
         tokio::fs::symlink(original, &link).await?;
         std::os::unix::fs::lchown(link, Some(self.user), Some(self.group))
@@ -186,13 +192,21 @@ impl TryFrom<DirEntry> for PreviewLink {
 }
 
 impl PreviewLink {
-    pub fn file_name(&self) -> &OsStr {
+    pub fn file_stem(&self) -> &OsStr {
         self.0
             .file_stem()
             .expect("A preview has a file name so a link to it has one too")
     }
+    /// something.NEF.xmp
     pub fn xmp_path(&self, source: &SourceDir) -> XmpFile {
-        XmpFile(source.0.0.join(self.file_name()).with_extension("xmp"))
+        XmpFile(
+            source
+                .0
+                .0
+                .join(self.file_stem())
+                .with_added_extension("NEF")
+                .with_added_extension("xmp"),
+        )
     }
 }
 
@@ -230,5 +244,45 @@ impl XmpFile {
 
         let preview = source.0.0.join(name).with_extension("jpg");
         PreviewFile(preview)
+    }
+
+    /// Includes the extension
+    pub fn file_stem(&self) -> &OsStr {
+        self.0.file_stem().expect("A raw file always has a name")
+    }
+}
+
+pub trait MetadataExtExt {
+    fn anyone_can_read(&self) -> bool;
+    fn anyone_can_write(&self) -> bool;
+    fn user_can_read(&self, user_id: u32) -> bool;
+    fn user_can_write(&self, user_id: u32) -> bool;
+    fn group_can_read(&self, group_id: u32) -> bool;
+    fn group_can_write(&self, group_id: u32) -> bool;
+}
+
+impl MetadataExtExt for Metadata {
+    fn anyone_can_read(&self) -> bool {
+        self.mode() & 0o004 == 0o004
+    }
+
+    fn anyone_can_write(&self) -> bool {
+        self.mode() & 0o002 == 0o002
+    }
+
+    fn user_can_read(&self, user_id: u32) -> bool {
+        self.anyone_can_read() || (self.mode() & 0o400 == 0o400 && self.uid() == user_id)
+    }
+
+    fn user_can_write(&self, user_id: u32) -> bool {
+        self.anyone_can_write() || (self.mode() & 0o200 == 0o200 && self.uid() == user_id)
+    }
+
+    fn group_can_read(&self, group_id: u32) -> bool {
+        self.anyone_can_read() || (self.mode() & 0o040 == 0o040 && self.gid() == group_id)
+    }
+
+    fn group_can_write(&self, group_id: u32) -> bool {
+        self.anyone_can_write() || (self.mode() & 0o020 == 0o020 && self.gid() == group_id)
     }
 }

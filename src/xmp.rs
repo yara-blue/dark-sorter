@@ -1,62 +1,60 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::ErrorKind;
 use std::num::ParseIntError;
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use color_eyre::eyre::Context;
 use tokio::sync::Notify;
+use tracing::debug;
 
 use crate::SourceDir;
 use crate::fs::{PreviewFile, RawFile, ThrottledFs, XmpFile};
 use crate::watcher::EyreWithPath;
 
-/// TODO do similar thing for file metadata
-#[derive(Default)]
-pub(crate) struct ParsedXmps(spin::Mutex<HashMap<XmpFile, XmpState>>);
+#[derive(Default, Clone)]
+pub(crate) struct ParsedXmps(Arc<spin::Mutex<HashMap<XmpFile, XmpState>>>);
+
+impl fmt::Debug for ParsedXmps {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let items = self.0.lock();
+        let items: Vec<_> = items
+            .iter()
+            .map(|(path, state)| {
+                let state = match state {
+                    XmpState::Loading(_) => "Loading".to_string(),
+                    XmpState::Loaded(xmp) => format!("{xmp:?}"),
+                    XmpState::Error(_) => "Err".to_string(),
+                };
+                format!("{}: {state}", path.display())
+            })
+            .collect();
+        f.debug_tuple("ParsedXmps").field(&items).finish()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) enum XmpState {
     Loading(Arc<Notify>),
     Loaded(Xmp),
-    Error(ReadParseError),
-}
-
-#[derive(Debug, thiserror::Error, Clone)]
-pub enum ReadParseError {
-    #[error("File does not exist, path: {}", .0.display())]
-    NotFound(Arc<Path>),
-    #[error("Could not read xmp file, path: {}", .1.display())]
-    Io(#[source] Arc<std::io::Error>, Arc<Path>),
-    #[error("Could not parse xmp file")]
-    Parse(#[source] ParseError),
-}
-
-impl ReadParseError {
-    pub(crate) fn from_io(e: tokio::io::Error, path: impl AsRef<Path>) -> Self {
-        if let ErrorKind::NotFound = e.kind() {
-            Self::NotFound(path.as_ref().to_path_buf().into())
-        } else {
-            Self::Io(Arc::new(e), path.as_ref().to_path_buf().into())
-        }
-    }
+    Error(XmpError),
 }
 
 impl ParsedXmps {
-    pub(crate) async fn cached_or_parse(
+    #[tracing::instrument(skip(self, fs))]
+    pub(crate) async fn get_cached_or_read_from_file(
         &self,
         path: &XmpFile,
         fs: &ThrottledFs,
-    ) -> Result<Xmp, ReadParseError> {
+    ) -> Result<Xmp, XmpError> {
         use std::collections::hash_map::Entry;
         let notify = Arc::new(Notify::new());
-        let loading = XmpState::Loading(Arc::clone(&notify));
         let state = match self.0.lock().entry(path.clone()) {
             Entry::Occupied(entry) => Some(entry.get().clone()),
             Entry::Vacant(slot) => {
-                slot.insert(loading);
+                slot.insert(XmpState::Loading(Arc::clone(&notify)));
                 None
             }
         };
@@ -72,16 +70,14 @@ impl ParsedXmps {
                 }
             }
             None => {
-                let xmp = fs
-                    .read_to_string(path)
-                    .await
-                    .map_err(|e| ReadParseError::from_io(e, path))?;
-                let res = Xmp::from_str(&xmp).map_err(ReadParseError::Parse);
+                debug!("reading in xmp");
+                let res = Xmp::read_from_file(path, fs).await;
                 let new_state = match res.clone() {
                     Ok(xmp) => XmpState::Loaded(xmp),
                     Err(e) => XmpState::Error(e),
                 };
                 *self.0.lock().get_mut(path).expect("we inserted Loading") = new_state;
+                debug!("done reading in, update xmp: {self:?}");
                 notify.notify_waiters();
                 res
             }
@@ -105,6 +101,28 @@ pub struct Xmp {
 }
 
 impl Xmp {
+    pub async fn read_from_file(path: &XmpFile, fs: &ThrottledFs) -> Result<Self, XmpError> {
+        let s = fs
+            .read_to_string(path)
+            .await
+            .map_err(|e| XmpError::from_io(e, path))?;
+
+        let rating = Rating::from_str(&s)?;
+        let edits = parse_edits(&s);
+        let raw = parse_raw(&s)?;
+
+        let xmp_file_name = path.file_stem().to_str().ok_or(XmpError::FileNameNotUtf8)?;
+
+        if *raw != *xmp_file_name {
+            return Err(XmpError::RawNameMismatches {
+                raw: Arc::clone(&raw),
+                xmp_file_name: xmp_file_name.to_string(),
+            });
+        }
+
+        Ok(Self { rating, edits, raw })
+    }
+
     pub fn preview_file(&self, source: &SourceDir) -> PreviewFile {
         PreviewFile(self.raw_file(source).0.with_extension("jpg"))
     }
@@ -131,7 +149,11 @@ impl Xmp {
 }
 
 #[derive(Debug, thiserror::Error, Clone)]
-pub enum ParseError {
+pub enum XmpError {
+    #[error("File does not exist, path: {}", .0.display())]
+    NotFound(Arc<Path>),
+    #[error("Could not read xmp file, path: {}", .1.display())]
+    Io(#[source] Arc<std::io::Error>, Arc<Path>),
     #[error("There was no rating field")]
     NoRatingStart,
     #[error("The rating field did not end")]
@@ -144,32 +166,40 @@ pub enum ParseError {
     NoRawListed,
     #[error("The file name listed in the Xmp has no extension")]
     RawWithoutExtension,
+    /// Else the name of the identically named raw file cannot be stored in the xmp
+    #[error("Xmp file name must be valid utf8")]
+    FileNameNotUtf8,
+    #[error(
+        "The raw file listed in the xmp must have the same name \
+        as the xmp file without it's extension. \
+        raw file listed: {raw}, \
+        xmp file name without extension: {xmp_file_name}"
+    )]
+    RawNameMismatches {
+        raw: Arc<str>,
+        xmp_file_name: String,
+    },
 }
 
-impl FromStr for Xmp {
-    type Err = ParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let rating = Rating::from_str(s)?;
-        let edits = parse_edits(s);
-        let raw = parse_raw(s)?;
-
-        Ok(dbg!(Self { rating, edits, raw }))
+impl XmpError {
+    pub(crate) fn from_io(e: tokio::io::Error, path: impl AsRef<Path>) -> Self {
+        if let ErrorKind::NotFound = e.kind() {
+            Self::NotFound(path.as_ref().to_path_buf().into())
+        } else {
+            Self::Io(Arc::new(e), path.as_ref().to_path_buf().into())
+        }
     }
 }
 
-pub(crate) fn parse_raw(s: &str) -> Result<Arc<str>, ParseError> {
+pub(crate) fn parse_raw(s: &str) -> Result<Arc<str>, XmpError> {
     let start_pattern = r#"xmpMM:DerivedFrom=""#;
-    let file_name_start =
-        s.find(start_pattern).ok_or(ParseError::NoRawListed)? + start_pattern.len();
-    let file_name_end = s[file_name_start..]
-        .find('"')
-        .ok_or(ParseError::NoFieldEnd)?;
+    let file_name_start = s.find(start_pattern).ok_or(XmpError::NoRawListed)? + start_pattern.len();
+    let file_name_end = s[file_name_start..].find('"').ok_or(XmpError::NoFieldEnd)?;
     let file_name = &s[file_name_start..file_name_start + file_name_end];
     if file_name.contains('.') {
         Ok(file_name.to_string().into())
     } else {
-        Err(ParseError::RawWithoutExtension)
+        Err(XmpError::RawWithoutExtension)
     }
 }
 
@@ -197,17 +227,15 @@ pub enum Rating {
     Five,
 }
 
-impl FromStr for Rating {
-    type Err = ParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+impl Rating {
+    fn from_str(s: &str) -> Result<Self, XmpError> {
         let start_pattern = "xmp:Rating=\"";
         let rating_start =
-            s.find(start_pattern).ok_or(ParseError::NoRatingStart)? + start_pattern.len();
-        let rating_end = s[rating_start..].find('"').ok_or(ParseError::NoFieldEnd)?;
+            s.find(start_pattern).ok_or(XmpError::NoRatingStart)? + start_pattern.len();
+        let rating_end = s[rating_start..].find('"').ok_or(XmpError::NoFieldEnd)?;
         let rating = s[rating_start..rating_start + rating_end]
             .parse()
-            .map_err(ParseError::RatingNotNumber)?;
+            .map_err(XmpError::RatingNotNumber)?;
         Ok(match rating {
             -1 => Rating::Rejected,
             0 => Rating::Unrated,
@@ -216,18 +244,7 @@ impl FromStr for Rating {
             3 => Rating::Three,
             4 => Rating::Four,
             5 => Rating::Five,
-            _ => return Err(ParseError::RatingOutOfRange),
+            _ => return Err(XmpError::RatingOutOfRange),
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_files_parse() {
-        Xmp::from_str(include_str!("../tests/assets/unrated.NEF.xmp")).unwrap();
-        Xmp::from_str(include_str!("../tests/assets/rated.NEF.xmp")).unwrap();
     }
 }
