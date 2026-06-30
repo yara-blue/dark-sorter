@@ -15,9 +15,9 @@ use fanotify_fid::types::FidEvent;
 use libc::FAN_CLOSE_WRITE;
 use tracing::{debug, instrument};
 
-use crate::ImageExporter;
 use crate::fs::{PreviewFile, PreviewLink, SourceDir, TargetDir, ThrottledFs, XmpFile};
 use crate::xmp::{self, Xmp};
+use crate::{Db, ImageExporter};
 
 pub fn start(dir: SourceDir) -> color_eyre::Result<Receiver<Kitty>> {
     if !caps::has_cap(None, CapSet::Permitted, Capability::CAP_SYS_ADMIN)
@@ -65,42 +65,39 @@ pub async fn handle_kitty_fs_change<Exporter: ImageExporter>(
     source: &SourceDir,
     target: &TargetDir,
     fs: &ThrottledFs,
+    db: &Db,
 ) -> color_eyre::Result<()> {
     let xmp = fs
         .read_to_string(&event.xmp_file)
         .await
         .map_err(|e| xmp::ReadParseError::from_io(e, &event.xmp_file))?;
+    let xmp = Xmp::from_str(&xmp).map_err(xmp::ReadParseError::Parse)?;
 
-    let xmp_path = event.xmp_file;
-    let link = xmp_path.link_path(target);
-    let preview = xmp_path.preview_path(source);
+    let xmp_file = event.xmp_file;
+    let link = xmp_file.link_path(target);
+    let preview = xmp_file.preview_path(source);
 
     debug!("got one");
     match event.event {
         KittyKind::FileDeleted | KittyKind::FileMovedFrom => {
             clean_up(&link, &preview)?;
         }
-        KittyKind::FileModificationComplete => {
-            let xmp = Xmp::from_str(&xmp).map_err(xmp::ReadParseError::Parse)?;
-            if xmp.rating.is_rated() {
-                Exporter::export(&xmp, &xmp_path, source, fs)
-                    .await
-                    .wrap_err("failed to export image")?;
+        // Some tools move the changed file over the existing one
+        // instead of opening it for writing. So a move to can actually edit
+        // the rating.
+        KittyKind::FileModificationComplete | KittyKind::FileMovedTo => {
+            if dbg!(xmp.rated()) {
+                if xmp.preview_missing(source).await? || db.get(&xmp_file) != xmp.edits {
+                    Exporter::export(&xmp, &xmp_file, source, fs)
+                        .await
+                        .wrap_err("failed to export image")?;
+                }
                 fs.symlink(&preview, &link)
                     .await
                     .wrap_err("Could not create link")
-                    .with_note(|| format!("link: {} -> {}", link.display(), preview.display()))?;
+                    .with_note(|| format!("link: {link} -> {preview}"))?;
             } else {
-                clean_up(&link, &preview)?;
-            }
-        }
-        KittyKind::FileMovedTo => {
-            let xmp = Xmp::from_str(&xmp).map_err(xmp::ReadParseError::Parse)?;
-            if xmp.rating.is_rated() {
-                fs.symlink(&preview, &link)
-                    .await
-                    .wrap_err("Could not create link")
-                    .with_note(|| format!("link: {} -> {}", link.display(), preview.display()))?;
+                dbg!(clean_up(&link, &preview))?;
             }
         }
     }
@@ -135,11 +132,12 @@ impl<T> EyreWithPath for color_eyre::Result<T> {
 }
 
 fn clean_up(link: &PreviewLink, preview: &PreviewFile) -> Result<(), color_eyre::eyre::Error> {
+    dbg!(link, preview);
     std::fs::remove_file(link)
         .err_ok_if(|e| e.kind() == ErrorKind::NotFound, ())
         .wrap_err("Could not remove link to preview")
         .note_path(link)?;
-    std::fs::remove_file(link)
+    std::fs::remove_file(preview)
         .err_ok_if(|e| e.kind() == ErrorKind::NotFound, ())
         .wrap_err("Could not remove preview jpg")
         .note_path(preview)?;

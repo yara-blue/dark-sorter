@@ -12,7 +12,7 @@ use tokio_stream::wrappers::ReadDirStream;
 
 use crate::fs::{DirName, PreviewLink, SourceDir, TargetDir, ThrottledFs, XmpFile};
 use crate::watcher::{EyreWithPath, ResultExt};
-use crate::xmp::{EditHash, ParsedXmps, Xmp};
+use crate::xmp::{EditHash, ParsedXmps};
 use crate::{ImageExporter, database};
 
 mod link;
@@ -153,7 +153,7 @@ async fn update_jpg_preview<Exporter: ImageExporter>(
         .iter()
         .cloned()
         .map(|xmp_file| async move {
-            let xmp = xmps.get_or_read_and_parse(&xmp_file, fs).await?;
+            let xmp = xmps.cached_or_parse(&xmp_file, fs).await?;
             if let Some(current_edits) = xmp.edits
                 && let Some(exported_edits) = previously_exported.get(&xmp_file)
                 && current_edits != exported_edits
@@ -163,7 +163,7 @@ async fn update_jpg_preview<Exporter: ImageExporter>(
                     .await
                     .wrap_err("failed to update preview")?;
                 previously_exported.insert(xmp_file.clone(), current_edits);
-            } else if xmp.rated() && preview_missing(&xmp, source).await? {
+            } else if xmp.rated() && xmp.preview_missing(source).await? {
                 Exporter::export(&xmp, &xmp_file, source, fs)
                     .await
                     .wrap_err("failed to create preview")?;
@@ -175,13 +175,4 @@ async fn update_jpg_preview<Exporter: ImageExporter>(
         .collect::<FuturesUnordered<_>>()
         .try_for_each(|()| future::ready(Ok(())))
         .await
-}
-
-async fn preview_missing(xmp: &Xmp, source: &SourceDir) -> color_eyre::Result<bool> {
-    let preview_path = xmp.preview_file(source);
-    let preview_exists = tokio::fs::try_exists(&preview_path)
-        .await
-        .wrap_err("Could not check if jpeg exists")
-        .note_path(preview_path)?;
-    Ok(!preview_exists)
 }

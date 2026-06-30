@@ -6,10 +6,12 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use color_eyre::eyre::Context;
 use tokio::sync::Notify;
 
 use crate::SourceDir;
 use crate::fs::{PreviewFile, RawFile, ThrottledFs, XmpFile};
+use crate::watcher::EyreWithPath;
 
 /// TODO do similar thing for file metadata
 #[derive(Default)]
@@ -43,7 +45,7 @@ impl ReadParseError {
 }
 
 impl ParsedXmps {
-    pub(crate) async fn get_or_read_and_parse(
+    pub(crate) async fn cached_or_parse(
         &self,
         path: &XmpFile,
         fs: &ThrottledFs,
@@ -109,6 +111,15 @@ impl Xmp {
 
     pub(crate) fn raw_file(&self, source: &SourceDir) -> RawFile {
         RawFile(source.0.0.join(&*self.raw))
+    }
+
+    pub async fn preview_missing(&self, source: &SourceDir) -> color_eyre::Result<bool> {
+        let preview_path = self.preview_file(source);
+        let preview_exists = tokio::fs::try_exists(&preview_path)
+            .await
+            .wrap_err("Could not check if jpeg exists")
+            .note_path(preview_path)?;
+        Ok(!preview_exists)
     }
 
     pub fn rated(&self) -> bool {

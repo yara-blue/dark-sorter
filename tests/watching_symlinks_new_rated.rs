@@ -21,13 +21,14 @@ fn removing_rating_removes_symlink() {
     test_support::remove_rating(&source, TestFile::A);
 
     thread::sleep(Duration::from_millis(100));
+    let db = dark_sorter::Db::default();
     let fs = dark_sorter::ThrottledFs::for_testing().unwrap();
     for event in rx.try_iter() {
         Runtime::new()
             .unwrap()
             .block_on(dark_sorter::watcher::handle_kitty_fs_change::<
                 FakeJpgExporter,
-            >(event, &source, &target, &fs))
+            >(event, &source, &target, &fs, &db))
             .unwrap()
     }
 
@@ -50,13 +51,14 @@ fn adding_rating_adds_symlink() {
     test_support::add_rating(&source, TestFile::A);
 
     thread::sleep(Duration::from_millis(100));
+    let db = dark_sorter::Db::default();
     let fs = dark_sorter::ThrottledFs::for_testing().unwrap();
     for event in rx.try_iter() {
         Runtime::new()
             .unwrap()
             .block_on(dark_sorter::watcher::handle_kitty_fs_change::<
                 FakeJpgExporter,
-            >(event, &source, &target, &fs))
+            >(event, &source, &target, &fs, &db))
             .unwrap()
     }
 

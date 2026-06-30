@@ -35,20 +35,13 @@ pub async fn should_remove_link(
         return Ok(true);
     }
 
-    let xmp = match xmps
-        .get_or_read_and_parse(&link.xmp_path(source_dir), fs)
-        .await
-    {
+    let xmp = match xmps.cached_or_parse(&link.xmp_path(source_dir), fs).await {
         Ok(xmp) => xmp,
         Err(xmp::ReadParseError::NotFound(_)) => return Ok(true),
         Err(e) => return Err(e).wrap_err("Could not read xmp"),
     };
 
-    if xmp.rating.is_rated() {
-        Ok(false)
-    } else {
-        Ok(true)
-    }
+    if xmp.rated() { Ok(false) } else { Ok(true) }
 }
 
 pub async fn remove_link_if_stale(
@@ -105,15 +98,11 @@ async fn should_be_linked(
     fs: &ThrottledFs,
 ) -> color_eyre::Result<bool> {
     let xmp = xmps
-        .get_or_read_and_parse(xmp_file, fs)
+        .cached_or_parse(xmp_file, fs)
         .await
         .wrap_err("Could not read xmp")
         .note_path(xmp_file)?;
-    if xmp.rating.is_rated() {
-        Ok(true)
-    } else {
-        Ok(false)
-    }
+    if xmp.rated() { Ok(true) } else { Ok(false) }
 }
 
 #[instrument(skip_all)]

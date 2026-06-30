@@ -102,6 +102,7 @@ async fn main() -> color_eyre::Result<()> {
                 &cli.source_dir,
                 &cli.target_dir,
                 &fs,
+                &db,
             )
             .await?;
         }

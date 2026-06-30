@@ -22,24 +22,7 @@ pkgs.testers.runNixOSTest {
   # Methods available on machine objects:
   # https://nixos.org/manual/nixos/stable/index.html#ssec-machine-objects
   testScript = ''
-import time
 from time import sleep
-from pathlib import Path
-
-class Instant(float):
-	def elapsed(self):
-		return Instant.now() - self
-	def now():
-		return time.monotonic()
-
-def try_for_duration(seconds, func):
-	start = Instant.now()
-	while start.elapsed() < seconds:
-		if func():
-			return
-		else:
-			sleep(0.1)
-	assert False, "timed out"
 
 # setup
 machine.succeed("mkdir /source --mode 770")
@@ -81,15 +64,20 @@ symlink = machine.wait_until_succeeds("realpath /target/b.jpg", 2)
 assert symlink.strip() == "/source/b.jpg", f"symlink to {symlink} instead of source/b.jpg"
 
 # TEST 3: watcher notices file getting rated
-assert machine.succeed("test -f /source/c.jpg & echo True") == "True"
+machine.fail("test -f /source/c.jpg")
 machine.succeed("sed -i 's/xmp:Rating=\"0\"/xmp:Rating=\"4\"/' /source/c.NEF.xmp")
 machine.wait_for_file("/source/c.jpg", 20)
 symlink = machine.wait_until_succeeds("realpath /target/c.jpg", 2)
-assert symlink == "/source/c.jpg"
+print("hiiii")
+print(symlink)
+assert symlink.strip() == "/source/c.jpg"
 
 # TEST 4: watcher notices file rating getting removed
-assert Path("/target/c.jpg").exists(), "c is unrated, preview should not exist anymore"
+print("hiiii1")
 machine.succeed("sed -i 's/xmp:Rating=\"4\"/xmp:Rating=\"0\"/' /source/c.NEF.xmp")
-try_for_duration(5, lambda : not Path("/source/c.jpg").exists())
+print("hiiii2")
+sleep(1)
+print("hiiii3")
+machine.fail("test -f /source/c.jpg")
 '';
     }
