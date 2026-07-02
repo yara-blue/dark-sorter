@@ -7,21 +7,20 @@ use tokio::process;
 use tokio::sync::Semaphore;
 use tracing::debug;
 
-use crate::fs::{MetadataExtExt, PreviewFile, RawFile, SourceDir, XmpFile};
+use crate::fs::{MetadataExtExt, PreviewFile, RawFile, XmpFile};
 use crate::watcher::{EyreWithPath, ResultExt};
-use crate::xmp::Xmp;
 use crate::{ImageExporter, ThrottledFs};
 
 pub struct DarktableCli;
 
 impl ImageExporter for DarktableCli {
     fn export(
-        xmp: &Xmp,
         xmp_file: &XmpFile,
-        source: impl AsRef<SourceDir> + Send,
+        input_file: &RawFile,
+        output_file: &PreviewFile,
         fs: &ThrottledFs,
     ) -> impl Future<Output = color_eyre::Result<()>> + Send {
-        export(xmp, xmp_file, source, fs)
+        export(xmp_file, input_file, output_file, fs)
     }
 }
 
@@ -31,9 +30,9 @@ struct StringError(String);
 
 /// Globally limit to one file at the time
 pub async fn export(
-    xmp: &Xmp,
     xmp_file: &XmpFile,
-    source: impl AsRef<SourceDir>,
+    input_file: &RawFile,
+    output_file: &PreviewFile,
     fs: &ThrottledFs,
 ) -> color_eyre::Result<()> {
     // darktable export is already highly parallel
@@ -44,10 +43,7 @@ pub async fn export(
         .await
         .expect("static semaphore can not be closed");
 
-    let input_file = xmp.raw_file(source.as_ref());
-    let output_file = xmp.preview_file(source.as_ref());
     debug!("Exporting image: {input_file}");
-
     asses_file_state(&input_file, &output_file, fs).await?;
 
     let output = process::Command::new("nice")

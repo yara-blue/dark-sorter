@@ -62,5 +62,5 @@ fn adding_rating_adds_symlink() {
             .unwrap()
     }
 
-    test_support::assert_symlinked(target, TestFile::A);
+    test_support::assert_preview_in_place(target, TestFile::A);
 }

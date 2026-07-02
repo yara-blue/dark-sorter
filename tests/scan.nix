@@ -45,12 +45,10 @@ pkgs.testers.runNixOSTest {
   testScript = ''
     machine.wait_for_unit("default.target")
 
-    # scan should link rated file and create a preview for it
-    machine.wait_until_succeeds("test -f /source/rated.jpg", 20)
-    symlink = machine.wait_until_succeeds("realpath /target/rated.jpg", 20)
-    assert symlink.strip() == "/source/rated.jpg"
+    # scan should create preview for rated file
+    machine.wait_until_succeeds("test -f /target/rated.jpg", 20)
 
-    # scan should not link unrated file and create a preview for it
+    # scan should not create preview for unrated file
     machine.fail("test -f /target/unrated.jpg")
   '';
 }

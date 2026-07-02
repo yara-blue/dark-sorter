@@ -29,7 +29,7 @@ fn rated_files_get_symlinked() {
         ))
         .unwrap();
 
-    test_support::assert_symlinked(&target, TestFile::A);
+    test_support::assert_preview_in_place(&target, TestFile::A);
 }
 
 #[test]
@@ -59,5 +59,5 @@ fn missing_jpeg_gets_created() {
         ))
         .unwrap();
 
-    test_support::assert_symlinked(&target, TestFile::A);
+    test_support::assert_preview_in_place(&target, TestFile::A);
 }

@@ -8,25 +8,24 @@ mod darktable_cli;
 mod database;
 mod fs;
 
+pub mod immich;
 mod scan;
 pub mod watcher;
 mod xmp;
-pub mod immich;
 
 pub use darktable_cli::DarktableCli;
 pub use database::Db;
 pub use fs::{BaseSourceDir, BaseTargetDir, ThrottledFs};
 pub use scan::scan_clean_and_link;
 
-use crate::fs::XmpFile;
-use crate::xmp::Xmp;
+use crate::fs::{PreviewFile, RawFile, XmpFile};
 
 /// Only here so we can test without having to run darktable
 pub trait ImageExporter: 'static {
     fn export(
-        xmp: &Xmp,
         xmp_file: &XmpFile,
-        source: impl AsRef<fs::SourceDir> + Send,
+        input_file: &RawFile,
+        output_file: &PreviewFile,
         fs: &fs::ThrottledFs,
     ) -> impl Future<Output = color_eyre::Result<()>> + Send;
 }

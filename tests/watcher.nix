@@ -45,21 +45,17 @@ pkgs.testers.runNixOSTest {
     # TEST 1: watcher notices new files
     machine.succeed("mv /rated.NEF /source/rated.NEF")
     machine.succeed("mv /rated.NEF.xmp /source/rated.NEF.xmp")
-    machine.wait_for_file("/source/rated.jpg", 20)
-    symlink = machine.wait_until_succeeds("realpath /target/rated.jpg", 2)
-    assert symlink.strip() == "/source/rated.jpg", f"symlink to {symlink} instead of source/rated.jpg"
+    machine.wait_for_file("/target/rated.jpg", 20)
 
     # TEST 2: watcher notices file getting rated
     machine.succeed("mv /starts_unrated.NEF /source/starts_unrated.NEF")
     machine.succeed("mv /starts_unrated.NEF.xmp /source/starts_unrated.NEF.xmp")
     machine.succeed("sed -i 's/xmp:Rating=\"0\"/xmp:Rating=\"4\"/' /source/starts_unrated.NEF.xmp")
-    machine.wait_for_file("/source/starts_unrated.jpg", 20)
-    symlink = machine.wait_until_succeeds("realpath /target/starts_unrated.jpg", 2)
-    assert symlink.strip() == "/source/starts_unrated.jpg"
+    machine.wait_for_file("/target/starts_unrated.jpg", 20)
 
     # TEST 3: watcher notices file rating getting removed
     machine.succeed("sed -i 's/xmp:Rating=\"4\"/xmp:Rating=\"0\"/' /source/starts_unrated.NEF.xmp")
     sleep(1)
-    machine.fail("test -f /source/starts_unrated.jpg")
+    machine.fail("test -f /target/starts_unrated.jpg")
   '';
 }

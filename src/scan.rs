@@ -4,20 +4,20 @@ use std::io::ErrorKind;
 
 use color_eyre::Section;
 use color_eyre::eyre::Context;
-use futures::future::try_join4;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt};
+use futures_concurrency::future::TryJoin;
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReadDirStream;
 
 use crate::fs::{
-    BaseSourceDir, BaseTargetDir, DirName, PreviewLink, SourceDir, TargetDir, ThrottledFs, XmpFile,
+    BaseSourceDir, BaseTargetDir, DirName, PreviewFile, SourceDir, TargetDir, ThrottledFs, XmpFile,
 };
 use crate::watcher::{EyreWithPath, ResultExt};
-use crate::xmp::{EditHash, ParsedXmps};
+use crate::xmp::ParsedXmps;
 use crate::{ImageExporter, database};
 
-mod link;
+pub mod preview;
 
 pub async fn scan_clean_and_link<Exporter: ImageExporter>(
     source_dir: BaseSourceDir,
@@ -72,7 +72,7 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
         }
     }
 
-    let mut links = HashSet::new();
+    let mut previews = HashSet::new();
     tokio::fs::create_dir(&target_dir)
         .await
         .ignore_err_if(|e| e.kind() == ErrorKind::AlreadyExists, ())
@@ -83,7 +83,6 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
         .await
         .wrap_err("Could not read target dir")
         .note_path(&target_dir)?;
-    let mut n_preview_links = 0;
     let mut read_target = ReadDirStream::new(read_target);
     while let Some(res) = read_target.next().await {
         let entry = res
@@ -94,11 +93,10 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
             .await
             .wrap_err("Could not resolve file type")
             .with_note(|| format!("entry: {}", entry.path().display()))?;
-        if ty.is_symlink()
-            && let Ok(link) = PreviewLink::try_from(entry)
+        if ty.is_file()
+            && let Ok(preview) = PreviewFile::try_from(entry)
         {
-            links.insert(link);
-            n_preview_links += 1;
+            previews.insert(preview);
         }
     }
 
@@ -118,29 +116,24 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
         .map(|join_result| join_result.wrap_err("A panic occurred").flatten())
         .try_for_each(|()| future::ready(Ok(())));
 
-    let (_, n_preview_links_created, _, _) = try_join4(
-        link::remove_stale(&source_dir, links.iter(), &parsed_xmps, &fs),
-        link::create_new(
+    let (_, n_preview_links_created, _) = (
+        preview::remove_stale(&source_dir, previews.iter(), &parsed_xmps, &fs),
+        preview::create_update_or_clean::<Exporter>(
             &xmp_files,
-            &links,
+            &parsed_xmps,
+            &source_dir,
             &target_dir,
-            &source_dir,
-            &parsed_xmps,
             &fs,
-        ),
-        update_jpg_preview::<Exporter>(
-            &xmp_files,
-            &parsed_xmps,
-            &source_dir,
             &previously_exported,
-            &fs,
         ),
         recursive_scans,
     )
-    .await?;
+        .try_join()
+        .await?;
 
-    if n_preview_links + n_preview_links_created == 0 {
-        todo!("notify immich sync of empty dir so it can be removed from immich")
+    if previews.len() + n_preview_links_created == 0 {
+        // todo!("notify immich sync of empty dir so it can be removed from immich")
+        // TODO!
     }
     Ok(())
 }
@@ -167,39 +160,4 @@ fn recurse_into_subdir<Exporter: ImageExporter>(
         previously_exported,
         parsed_xmps,
     ))
-}
-
-async fn update_jpg_preview<Exporter: ImageExporter>(
-    xmp_files: &[XmpFile],
-    xmps: &ParsedXmps,
-    source: &SourceDir,
-    previously_exported: &database::Db,
-    fs: &ThrottledFs,
-) -> color_eyre::Result<()> {
-    xmp_files
-        .iter()
-        .cloned()
-        .map(|xmp_file| async move {
-            let xmp = xmps.get_cached_or_read_from_file(&xmp_file, fs).await?;
-            if let Some(current_edits) = xmp.edits
-                && let Some(exported_edits) = previously_exported.get(&xmp_file)
-                && current_edits != exported_edits
-                && xmp.rated()
-            {
-                Exporter::export(&xmp, &xmp_file, source, fs)
-                    .await
-                    .wrap_err("failed to update preview")?;
-                previously_exported.insert(xmp_file.clone(), current_edits);
-            } else if xmp.rated() && xmp.preview_missing(source).await? {
-                Exporter::export(&xmp, &xmp_file, source, fs)
-                    .await
-                    .wrap_err("failed to create preview")?;
-                previously_exported
-                    .insert(xmp_file.clone(), xmp.edits.unwrap_or(EditHash::NO_EDITS));
-            }
-            Ok(())
-        })
-        .collect::<FuturesUnordered<_>>()
-        .try_for_each(|()| future::ready(Ok(())))
-        .await
 }

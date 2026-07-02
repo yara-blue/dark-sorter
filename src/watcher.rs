@@ -1,5 +1,4 @@
 use std::hint::cold_path;
-use std::io::ErrorKind;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
@@ -14,7 +13,7 @@ use fanotify_fid::types::FidEvent;
 use libc::FAN_CLOSE_WRITE;
 use tracing::{debug, instrument};
 
-use crate::fs::{PreviewFile, PreviewLink, ThrottledFs, XmpFile};
+use crate::fs::{ThrottledFs, XmpFile};
 use crate::xmp::Xmp;
 use crate::{BaseSourceDir, BaseTargetDir, Db, ImageExporter};
 
@@ -71,31 +70,21 @@ pub async fn handle_kitty_fs_change<Exporter: ImageExporter>(
         .await
         .wrap_err("Could not read xmp file")
         .note_path(&xmp_file)?;
-    let link = xmp_file.link_path(target);
     let preview = xmp_file.preview_path(source);
 
     debug!("got one");
     match event.event {
         KittyKind::FileDeleted | KittyKind::FileMovedFrom => {
-            clean_up(&link, &preview)?;
+            crate::scan::preview::clean_up(&preview)?;
         }
         // Some tools move the changed file over the existing one
         // instead of opening it for writing. So a move to can actually edit
         // the rating.
         KittyKind::FileModificationComplete | KittyKind::FileMovedTo => {
-            if xmp.rated() {
-                if xmp.preview_missing(source).await? || db.get(&xmp_file) != xmp.edits {
-                    Exporter::export(&xmp, &xmp_file, source, fs)
-                        .await
-                        .wrap_err("failed to export image")?;
-                }
-                fs.symlink(&preview, &link)
-                    .await
-                    .wrap_err("Could not create link")
-                    .with_note(|| format!("link: {link} -> {preview}"))?;
-            } else {
-                clean_up(&link, &preview)?;
-            }
+            crate::scan::preview::create_update_or_clean_one::<Exporter>(
+                xmp, &xmp_file, source, target, fs, db,
+            )
+            .await?;
         }
     }
 
@@ -126,20 +115,6 @@ impl<T> EyreWithPath for color_eyre::Result<T> {
     fn note_path(self, path: impl AsRef<std::path::Path>) -> Self {
         self.with_note(|| format!("path: {}", path.as_ref().display()))
     }
-}
-
-#[instrument]
-fn clean_up(link: &PreviewLink, preview: &PreviewFile) -> Result<(), color_eyre::eyre::Error> {
-    debug!("removing file and symlink");
-    std::fs::remove_file(link)
-        .ignore_err_if(|e| e.kind() == ErrorKind::NotFound, ())
-        .wrap_err("Could not remove link to preview")
-        .note_path(link)?;
-    std::fs::remove_file(preview)
-        .ignore_err_if(|e| e.kind() == ErrorKind::NotFound, ())
-        .wrap_err("Could not remove preview jpg")
-        .note_path(preview)?;
-    Ok(())
 }
 
 #[derive(Debug)]

@@ -212,7 +212,6 @@ macro_rules! path_wrapper {
 }
 
 path_wrapper! {RawFile}
-path_wrapper! {PreviewLink}
 path_wrapper! {PreviewFile}
 path_wrapper! {XmpFile}
 path_wrapper! {
@@ -232,24 +231,7 @@ impl RawFile {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("Not path ending in jpg")]
-pub struct NotAPreviewLink;
-
-impl TryFrom<DirEntry> for PreviewLink {
-    type Error = NotAPreviewLink;
-
-    fn try_from(entry: DirEntry) -> Result<Self, Self::Error> {
-        let path = entry.path();
-        if path.extension().is_some_and(|e| e == "jpg") {
-            Ok(Self(path))
-        } else {
-            Err(NotAPreviewLink)
-        }
-    }
-}
-
-impl PreviewLink {
+impl PreviewFile {
     pub fn file_stem(&self) -> &OsStr {
         self.0
             .file_stem()
@@ -266,13 +248,22 @@ impl PreviewLink {
                 .with_added_extension("xmp"),
         )
     }
+}
 
-    pub fn parent(&self) -> TargetDir {
-        TargetDir(Dir(self
-            .0
-            .parent()
-            .expect("A preview link has to be in a directory")
-            .to_path_buf()))
+#[derive(Debug, thiserror::Error)]
+#[error("Not path ending in jpg")]
+pub struct NotAPreviewFile;
+
+impl TryFrom<DirEntry> for PreviewFile {
+    type Error = NotAPreviewFile;
+
+    fn try_from(entry: DirEntry) -> Result<Self, Self::Error> {
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "jpg") {
+            Ok(Self(path))
+        } else {
+            Err(NotAPreviewFile)
+        }
     }
 }
 
@@ -294,16 +285,6 @@ impl TryFrom<DirEntry> for XmpFile {
 }
 
 impl XmpFile {
-    pub fn link_path(&self, target: impl AsRef<TargetDir>) -> PreviewLink {
-        // TODO wtf refactor this
-        let mut xmp_path = self.0.with_extension("");
-        xmp_path.set_extension("");
-        let name = xmp_path.file_name().expect("DirEntry has a file name");
-
-        let link = target.as_ref().0.0.join(name).with_extension("jpg");
-        PreviewLink(link)
-    }
-
     pub fn preview_path(&self, source: impl AsRef<SourceDir>) -> PreviewFile {
         // TODO wtf refactor this
         let mut xmp_path = self.0.with_extension("");

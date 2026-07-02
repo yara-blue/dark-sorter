@@ -7,9 +7,8 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard, Once};
 use tempfile::TempDir;
 
-use crate::fs::{Dir, SourceDir, TargetDir, XmpFile};
+use crate::fs::{Dir, PreviewFile, RawFile, SourceDir, TargetDir, XmpFile};
 use crate::watcher::EyreWithPath;
-use crate::xmp::Xmp;
 use crate::{BaseSourceDir, BaseTargetDir, ImageExporter};
 
 /// an initially rated picture
@@ -39,8 +38,8 @@ impl TestFile {
                 .with_added_extension("xmp"),
         )
     }
-    fn jpg_link(self, target: &TargetDir) -> XmpFile {
-        XmpFile(
+    fn jpg_link(self, target: &TargetDir) -> PreviewFile {
+        PreviewFile(
             target
                 .0
                 .0
@@ -129,21 +128,16 @@ pub fn empty_dir() -> (TempDir, BaseTargetDir) {
     (dir, BaseTargetDir(TargetDir(Dir(path))))
 }
 
-pub fn assert_symlinked(target: impl AsRef<TargetDir>, test_file: TestFile) {
+pub fn assert_preview_in_place(target: impl AsRef<TargetDir>, test_file: TestFile) {
     let file = test_file.jpg_link(target.as_ref());
-    let rated_meta = fs::symlink_metadata(&file).expect("After running there should be a symlink");
-
-    assert!(rated_meta.file_type().is_symlink());
-
-    let symlink_target = fs::canonicalize(file).unwrap();
-
-    assert!(symlink_target.is_file());
-    assert!(fs::read_to_string(symlink_target).unwrap() == RATED_PREVIEW_JPEG_CONTENT);
+    let rated_meta = fs::symlink_metadata(&file).expect("There should be a preview");
+    assert!(rated_meta.file_type().is_file());
+    assert!(fs::read_to_string(file).unwrap() == RATED_PREVIEW_JPEG_CONTENT);
 }
 
 pub fn assert_not_symlinked(target: impl AsRef<TargetDir>, test_file: TestFile) {
     let file = test_file.jpg_link(target.as_ref());
-    let res = fs::symlink_metadata(&file).unwrap_err();
+    let res = fs::metadata(&file).unwrap_err();
     assert_eq!(res.kind(), ErrorKind::NotFound);
 }
 
@@ -169,13 +163,11 @@ pub struct FakeJpgExporter;
 
 impl ImageExporter for FakeJpgExporter {
     async fn export(
-        xmp: &Xmp,
         _: &XmpFile,
-        source: impl AsRef<SourceDir> + Send,
+        _: &RawFile,
+        output_file: &PreviewFile,
         fs: &crate::fs::ThrottledFs,
     ) -> color_eyre::Result<()> {
-        let input_file = xmp.raw_file(source);
-        let output_file = input_file.preview_file();
         std::fs::write(&output_file, RATED_PREVIEW_JPEG_CONTENT)
             .wrap_err("Failed to write fake jpeg")
             .note_path(&output_file)?;
