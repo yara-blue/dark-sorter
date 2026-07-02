@@ -1,9 +1,10 @@
 use clap::{Parser, ValueHint};
 use color_eyre::eyre::OptionExt;
 use dark_sorter::{
-    DarktableCli, Db, SourceDir, TargetDir, ThrottledFs, running_as_root, scan_clean_and_link,
-    watcher,
+    BaseSourceDir, BaseTargetDir, DarktableCli, Db, ThrottledFs, immich, running_as_root,
+    scan_clean_and_link, watcher,
 };
+use reqwest::Url;
 use tracing::{info, warn};
 use tracing_error::ErrorLayer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -18,11 +19,11 @@ use tracing_subscriber::{EnvFilter, fmt};
 struct Cli {
     /// Folder tree where the RAWs and darktable xmp files are.
     #[arg(short, long, value_hint=ValueHint::DirPath)]
-    source_dir: SourceDir,
+    source_dir: BaseSourceDir,
 
     /// Folder in which sibling structure should be build and previews linked
     #[arg(short, long, value_hint=ValueHint::DirPath)]
-    target_dir: TargetDir,
+    target_dir: BaseTargetDir,
 
     /// User that will create the files.
     /// Defaults to the current user if not set
@@ -35,12 +36,14 @@ struct Cli {
     photo_group: Option<String>,
 
     /// Refresh library on this immich instance
-    #[arg(short, long, group = "immich")]
-    immich_url: Option<String>,
+    #[arg(short, long, group = "immich", value_hint=ValueHint::Url)]
+    immich_url: Option<Url>,
 
     /// API key for th immich instance
+    /// Get it here: https://my.immich.app/user-settings?isOpen=api-keys
+    /// It needs: library.create, library.update, library.read, library.delete & users.read,  
     #[arg(short = 'a', long, group = "immich")]
-    immich_api_key: Option<String>,
+    immich_api_key: Option<immich::ApiKey>,
 
     /// Watch files after scan, requires dark-sorter to run as root.
     #[arg(short, long)]
@@ -83,6 +86,14 @@ async fn main() -> color_eyre::Result<()> {
     let event_rx = cli
         .daemon
         .then_some(watcher::start(cli.source_dir.clone())?);
+
+    let immich_sync = match (cli.immich_url, cli.immich_api_key) {
+        (None, None) => None,
+        (Some(url), Some(api_key)) => {
+            Some(immich::start_sync_daemon(url, api_key, &cli.target_dir).await?)
+        }
+        (None, Some(_)) | (Some(_), None) => unreachable!("from the same arg group"),
+    };
 
     let mut first_scan = true;
     loop {

@@ -89,12 +89,8 @@ macro_rules! dir_wrapper {
             pub fn display(&self) -> std::path::Display<'_> {
                 self.0.display()
             }
-            // #[allow(dead_code)]
-            // pub fn join(&self, path: impl AsRef<Path>) -> Self {
-            //     Self(Dir(self.0.join(path)))
-            // }
             pub fn subdir(&self, dir: &DirName) -> Self {
-                Self(Dir(self.0.0.join(dir)))
+                Self(self.0.subdir(dir))
             }
         }
         impl AsRef<$wraps> for $name {
@@ -102,9 +98,14 @@ macro_rules! dir_wrapper {
                 &self.0
             }
         }
+        impl AsRef<$name> for $name {
+            fn as_ref(&self) -> &$name {
+                &self
+            }
+        }
         impl AsRef<Path> for $name {
             fn as_ref(&self) -> &Path {
-                &self.0.0
+                &self.0.as_ref()
             }
         }
         impl AsRef<OsStr> for $name {
@@ -112,17 +113,68 @@ macro_rules! dir_wrapper {
                 &self.0.0.as_ref()
             }
         }
-        impl FromStr for $name {
-            type Err = <PathBuf as FromStr>::Err;
-
-            fn from_str(s: &str) -> Result<Self, Self::Err> {
-                PathBuf::from_str(s).map(Dir).map($name)
-            }
-        }
     };
 }
 dir_wrapper! {TargetDir, Dir}
 dir_wrapper! {SourceDir, Dir}
+
+dir_wrapper! {BaseTargetDir, TargetDir}
+dir_wrapper! {BaseSourceDir, SourceDir}
+
+impl FromStr for BaseTargetDir {
+    type Err = <PathBuf as FromStr>::Err;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        PathBuf::from_str(s)
+            .map(Dir)
+            .map(TargetDir)
+            .map(BaseTargetDir)
+    }
+}
+
+impl FromStr for BaseSourceDir {
+    type Err = <PathBuf as FromStr>::Err;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        PathBuf::from_str(s)
+            .map(Dir)
+            .map(SourceDir)
+            .map(BaseSourceDir)
+    }
+}
+
+impl From<BaseTargetDir> for TargetDir {
+    fn from(base: BaseTargetDir) -> Self {
+        base.0
+    }
+}
+
+impl From<BaseSourceDir> for SourceDir {
+    fn from(base: BaseSourceDir) -> Self {
+        base.0
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Not a subdir of the base target dir")]
+pub struct NotBaseSubDir;
+
+impl TargetDir {
+    pub fn try_new(path: impl AsRef<Path>, base: &BaseTargetDir) -> Result<Self, NotBaseSubDir> {
+        let path = path.as_ref();
+        if path.starts_with(base) {
+            Ok(Self(Dir(path.to_path_buf())))
+        } else {
+            Err(NotBaseSubDir)
+        }
+    }
+    pub fn relative_to_base(&self, base: &BaseTargetDir) -> &Path {
+        self.0
+            .0
+            .strip_prefix(&base.0.0)
+            .expect("There is only one base target dir and all target dirs have it as prefix")
+    }
+}
 
 macro_rules! path_wrapper {
     ($(#[$docs:meta])? $name:ident) => {
@@ -168,6 +220,12 @@ path_wrapper! {
     Dir
 }
 
+impl Dir {
+    pub fn subdir(&self, dir: &DirName) -> Self {
+        Self(self.0.join(dir))
+    }
+}
+
 impl RawFile {
     pub fn preview_file(&self) -> PreviewFile {
         PreviewFile(self.0.with_extension("jpg"))
@@ -208,6 +266,14 @@ impl PreviewLink {
                 .with_added_extension("xmp"),
         )
     }
+
+    pub fn parent(&self) -> TargetDir {
+        TargetDir(Dir(self
+            .0
+            .parent()
+            .expect("A preview link has to be in a directory")
+            .to_path_buf()))
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -228,21 +294,23 @@ impl TryFrom<DirEntry> for XmpFile {
 }
 
 impl XmpFile {
-    pub fn link_path(&self, target: &TargetDir) -> PreviewLink {
+    pub fn link_path(&self, target: impl AsRef<TargetDir>) -> PreviewLink {
+        // TODO wtf refactor this
         let mut xmp_path = self.0.with_extension("");
         xmp_path.set_extension("");
         let name = xmp_path.file_name().expect("DirEntry has a file name");
 
-        let link = target.0.0.join(name).with_extension("jpg");
+        let link = target.as_ref().0.0.join(name).with_extension("jpg");
         PreviewLink(link)
     }
 
-    pub fn preview_path(&self, source: &SourceDir) -> PreviewFile {
+    pub fn preview_path(&self, source: impl AsRef<SourceDir>) -> PreviewFile {
+        // TODO wtf refactor this
         let mut xmp_path = self.0.with_extension("");
         xmp_path.set_extension("");
         let name = xmp_path.file_name().expect("DirEntry has a file name");
 
-        let preview = source.0.0.join(name).with_extension("jpg");
+        let preview = source.as_ref().0.0.join(name).with_extension("jpg");
         PreviewFile(preview)
     }
 

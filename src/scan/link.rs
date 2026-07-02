@@ -4,8 +4,8 @@ use std::io::ErrorKind;
 
 use color_eyre::Section;
 use color_eyre::eyre::Context;
-use futures::TryStreamExt;
 use futures::stream::FuturesUnordered;
+use futures::TryStreamExt;
 use tracing::{debug, instrument};
 
 use crate::fs::{PreviewLink, SourceDir, TargetDir, ThrottledFs, XmpFile};
@@ -130,7 +130,7 @@ pub async fn create_new(
     source: &SourceDir,
     xmps: &xmp::ParsedXmps,
     fs: &ThrottledFs,
-) -> color_eyre::Result<()> {
+) -> color_eyre::Result<usize> {
     xmp_files
         .iter()
         .filter(|xmp| not_already_linked(xmp, target, links))
@@ -139,13 +139,14 @@ pub async fn create_new(
                 .await
                 .wrap_err("Could not determine whether link should be added")?
             {
-                create_link(xmp, source, target, fs).await
+                create_link(xmp, source, target, fs).await?;
+                Ok(1)
             } else {
-                Ok(())
+                Ok(0)
             }
         })
         .collect::<FuturesUnordered<_>>()
-        .try_for_each(|()| future::ready(Ok(())))
+        .try_fold(0, |sum, next| future::ready(Ok(sum + next)))
         .await
 }
 

@@ -7,10 +7,10 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard, Once};
 use tempfile::TempDir;
 
-use crate::ImageExporter;
 use crate::fs::{Dir, SourceDir, TargetDir, XmpFile};
 use crate::watcher::EyreWithPath;
 use crate::xmp::Xmp;
+use crate::{BaseSourceDir, BaseTargetDir, ImageExporter};
 
 /// an initially rated picture
 const SUBDIR: &str = "some_event/some_day";
@@ -81,12 +81,12 @@ impl SourceDirBuilder {
         self
     }
     #[must_use]
-    pub fn build(self) -> (TempDir, SourceDir) {
+    pub fn build(self) -> (TempDir, BaseSourceDir) {
         assert_eq!(self.unrated.intersection(&self.rated).count(), 0);
 
         let dir = tempfile::tempdir().unwrap();
         let subdir = dir.path().join(SUBDIR);
-        let source = SourceDir(Dir(dir.path().to_path_buf()));
+        let source = BaseSourceDir(SourceDir(Dir(dir.path().to_path_buf())));
         fs::create_dir_all(&subdir).unwrap();
 
         for test_file in self.unrated.union(&self.rated) {
@@ -123,14 +123,14 @@ impl SourceDirBuilder {
 }
 
 #[must_use]
-pub fn empty_dir() -> (TempDir, TargetDir) {
+pub fn empty_dir() -> (TempDir, BaseTargetDir) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().to_path_buf();
-    (dir, TargetDir(Dir(path)))
+    (dir, BaseTargetDir(TargetDir(Dir(path))))
 }
 
-pub fn assert_symlinked(target: &TargetDir, test_file: TestFile) {
-    let file = test_file.jpg_link(target);
+pub fn assert_symlinked(target: impl AsRef<TargetDir>, test_file: TestFile) {
+    let file = test_file.jpg_link(target.as_ref());
     let rated_meta = fs::symlink_metadata(&file).expect("After running there should be a symlink");
 
     assert!(rated_meta.file_type().is_symlink());
@@ -141,24 +141,24 @@ pub fn assert_symlinked(target: &TargetDir, test_file: TestFile) {
     assert!(fs::read_to_string(symlink_target).unwrap() == RATED_PREVIEW_JPEG_CONTENT);
 }
 
-pub fn assert_not_symlinked(target: &TargetDir, test_file: TestFile) {
-    let file = test_file.jpg_link(target);
+pub fn assert_not_symlinked(target: impl AsRef<TargetDir>, test_file: TestFile) {
+    let file = test_file.jpg_link(target.as_ref());
     let res = fs::symlink_metadata(&file).unwrap_err();
     assert_eq!(res.kind(), ErrorKind::NotFound);
 }
 
-pub fn remove_rating(source: &SourceDir, test_file: TestFile) {
+pub fn remove_rating(source: impl AsRef<SourceDir>, test_file: TestFile) {
     fs::write(
-        test_file.xmp_file(source),
+        test_file.xmp_file(source.as_ref()),
         include_str!("test_support/rated_picture.xmp")
             .replace("xmp:Rating=\"3\"", "xmp:Rating=\"0\""),
     )
     .unwrap();
 }
 
-pub fn add_rating(source: &SourceDir, test_file: TestFile) {
+pub fn add_rating(source: impl Into<SourceDir>, test_file: TestFile) {
     fs::write(
-        test_file.xmp_file(source),
+        test_file.xmp_file(&source.into()),
         include_str!("test_support/rated_picture.xmp"),
     )
     .unwrap();
@@ -171,7 +171,7 @@ impl ImageExporter for FakeJpgExporter {
     async fn export(
         xmp: &Xmp,
         _: &XmpFile,
-        source: &SourceDir,
+        source: impl AsRef<SourceDir> + Send,
         fs: &crate::fs::ThrottledFs,
     ) -> color_eyre::Result<()> {
         let input_file = xmp.raw_file(source);

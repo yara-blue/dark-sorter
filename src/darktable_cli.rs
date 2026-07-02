@@ -18,7 +18,7 @@ impl ImageExporter for DarktableCli {
     fn export(
         xmp: &Xmp,
         xmp_file: &XmpFile,
-        source: &SourceDir,
+        source: impl AsRef<SourceDir> + Send,
         fs: &ThrottledFs,
     ) -> impl Future<Output = color_eyre::Result<()>> + Send {
         export(xmp, xmp_file, source, fs)
@@ -33,7 +33,7 @@ struct StringError(String);
 pub async fn export(
     xmp: &Xmp,
     xmp_file: &XmpFile,
-    source: &SourceDir,
+    source: impl AsRef<SourceDir>,
     fs: &ThrottledFs,
 ) -> color_eyre::Result<()> {
     // darktable export is already highly parallel
@@ -44,8 +44,8 @@ pub async fn export(
         .await
         .expect("static semaphore can not be closed");
 
-    let input_file = xmp.raw_file(source);
-    let output_file = xmp.preview_file(source);
+    let input_file = xmp.raw_file(source.as_ref());
+    let output_file = xmp.preview_file(source.as_ref());
     debug!("Exporting image: {input_file}");
 
     asses_file_state(&input_file, &output_file, fs).await?;

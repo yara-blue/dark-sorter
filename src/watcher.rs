@@ -14,11 +14,11 @@ use fanotify_fid::types::FidEvent;
 use libc::FAN_CLOSE_WRITE;
 use tracing::{debug, instrument};
 
-use crate::fs::{PreviewFile, PreviewLink, SourceDir, TargetDir, ThrottledFs, XmpFile};
+use crate::fs::{PreviewFile, PreviewLink, ThrottledFs, XmpFile};
 use crate::xmp::Xmp;
-use crate::{Db, ImageExporter};
+use crate::{BaseSourceDir, BaseTargetDir, Db, ImageExporter};
 
-pub fn start(dir: SourceDir) -> color_eyre::Result<Receiver<Kitty>> {
+pub fn start(dir: BaseSourceDir) -> color_eyre::Result<Receiver<Kitty>> {
     if !caps::has_cap(None, CapSet::Permitted, Capability::CAP_SYS_ADMIN)
         .wrap_err("Could not check capabilities")?
     {
@@ -61,8 +61,8 @@ pub fn start(dir: SourceDir) -> color_eyre::Result<Receiver<Kitty>> {
 #[instrument(skip(source, target, fs))]
 pub async fn handle_kitty_fs_change<Exporter: ImageExporter>(
     event: Kitty,
-    source: &SourceDir,
-    target: &TargetDir,
+    source: &BaseSourceDir,
+    target: &BaseTargetDir,
     fs: &ThrottledFs,
     db: &Db,
 ) -> color_eyre::Result<()> {
@@ -157,7 +157,7 @@ pub enum KittyKind {
     FileMovedFrom,
 }
 
-fn handle_event(event: &FidEvent, dir: &SourceDir, tx: &Sender<Kitty>) {
+fn handle_event(event: &FidEvent, dir: &BaseSourceDir, tx: &Sender<Kitty>) {
     // Must run fast, gets ran for each file on the mount
     if let Some(ext) = event.path.extension()
         && ext == "xmp"

@@ -10,7 +10,9 @@ use futures::{StreamExt, TryStreamExt};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReadDirStream;
 
-use crate::fs::{DirName, PreviewLink, SourceDir, TargetDir, ThrottledFs, XmpFile};
+use crate::fs::{
+    BaseSourceDir, BaseTargetDir, DirName, PreviewLink, SourceDir, TargetDir, ThrottledFs, XmpFile,
+};
 use crate::watcher::{EyreWithPath, ResultExt};
 use crate::xmp::{EditHash, ParsedXmps};
 use crate::{ImageExporter, database};
@@ -18,15 +20,15 @@ use crate::{ImageExporter, database};
 mod link;
 
 pub async fn scan_clean_and_link<Exporter: ImageExporter>(
-    source_dir: SourceDir,
-    target_dir: TargetDir,
+    source_dir: BaseSourceDir,
+    target_dir: BaseTargetDir,
     fs: ThrottledFs,
     previously_exported: database::Db,
 ) -> color_eyre::Result<()> {
     let parsed_xmps = ParsedXmps::default();
     scan_clean_and_link_dir::<Exporter>(
-        source_dir,
-        target_dir,
+        source_dir.into(),
+        target_dir.into(),
         fs,
         previously_exported,
         parsed_xmps,
@@ -81,6 +83,7 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
         .await
         .wrap_err("Could not read target dir")
         .note_path(&target_dir)?;
+    let mut n_preview_links = 0;
     let mut read_target = ReadDirStream::new(read_target);
     while let Some(res) = read_target.next().await {
         let entry = res
@@ -95,6 +98,7 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
             && let Ok(link) = PreviewLink::try_from(entry)
         {
             links.insert(link);
+            n_preview_links += 1;
         }
     }
 
@@ -114,7 +118,7 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
         .map(|join_result| join_result.wrap_err("A panic occurred").flatten())
         .try_for_each(|()| future::ready(Ok(())));
 
-    try_join4(
+    let (_, n_preview_links_created, _, _) = try_join4(
         link::remove_stale(&source_dir, links.iter(), &parsed_xmps, &fs),
         link::create_new(
             &xmp_files,
@@ -134,6 +138,10 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
         recursive_scans,
     )
     .await?;
+
+    if n_preview_links + n_preview_links_created == 0 {
+        todo!("notify immich sync of empty dir so it can be removed from immich")
+    }
     Ok(())
 }
 

@@ -10,8 +10,7 @@ use color_eyre::eyre::Context;
 use tokio::sync::Notify;
 use tracing::debug;
 
-use crate::SourceDir;
-use crate::fs::{PreviewFile, RawFile, ThrottledFs, XmpFile};
+use crate::fs::{PreviewFile, RawFile, SourceDir, ThrottledFs, XmpFile};
 use crate::watcher::EyreWithPath;
 
 #[derive(Default, Clone)]
@@ -127,12 +126,12 @@ impl Xmp {
         PreviewFile(self.raw_file(source).0.with_extension("jpg"))
     }
 
-    pub(crate) fn raw_file(&self, source: &SourceDir) -> RawFile {
-        RawFile(source.0.0.join(&*self.raw))
+    pub(crate) fn raw_file(&self, source: impl AsRef<SourceDir>) -> RawFile {
+        RawFile(source.as_ref().0.0.join(&*self.raw))
     }
 
-    pub async fn preview_missing(&self, source: &SourceDir) -> color_eyre::Result<bool> {
-        let preview_path = self.preview_file(source);
+    pub async fn preview_missing(&self, source: impl AsRef<SourceDir>) -> color_eyre::Result<bool> {
+        let preview_path = self.preview_file(source.as_ref());
         let preview_exists = tokio::fs::try_exists(&preview_path)
             .await
             .wrap_err("Could not check if jpeg exists")

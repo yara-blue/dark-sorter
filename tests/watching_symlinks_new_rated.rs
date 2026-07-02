@@ -48,7 +48,7 @@ fn adding_rating_adds_symlink() {
     _t_guard.disable_cleanup(true);
 
     let rx = dark_sorter::watcher::start(source.clone()).unwrap();
-    test_support::add_rating(&source, TestFile::A);
+    test_support::add_rating(source.clone(), TestFile::A);
 
     thread::sleep(Duration::from_millis(100));
     let db = dark_sorter::Db::default();
@@ -62,5 +62,5 @@ fn adding_rating_adds_symlink() {
             .unwrap()
     }
 
-    test_support::assert_symlinked(&target, TestFile::A);
+    test_support::assert_symlinked(target, TestFile::A);
 }
