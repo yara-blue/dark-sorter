@@ -16,9 +16,9 @@ rec {
     pkgs = pkgs;
     nixosModule = nixosModule;
   };
-  # immich_integration = import ./tests/watcher.nix {
-  #   pkgs = pkgs;
-  #   nixosModule = nixosModule;
-  # };
+  immich = import ./tests/immich.nix {
+    pkgs = pkgs;
+    nixosModule = nixosModule;
+  };
   default = module;
 }

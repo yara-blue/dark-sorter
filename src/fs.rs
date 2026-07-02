@@ -248,6 +248,13 @@ impl PreviewFile {
                 .with_added_extension("xmp"),
         )
     }
+    pub fn parent_dir(&self) -> TargetDir {
+        TargetDir(Dir(self
+            .0
+            .parent()
+            .expect("a preview is always in a target dir")
+            .to_path_buf()))
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

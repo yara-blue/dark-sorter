@@ -28,7 +28,7 @@ fn removing_rating_removes_symlink() {
             .unwrap()
             .block_on(dark_sorter::watcher::handle_kitty_fs_change::<
                 FakeJpgExporter,
-            >(event, &source, &target, &fs, &db))
+            >(event, &source, &target, &fs, &db, None))
             .unwrap()
     }
 
@@ -58,7 +58,7 @@ fn adding_rating_adds_symlink() {
             .unwrap()
             .block_on(dark_sorter::watcher::handle_kitty_fs_change::<
                 FakeJpgExporter,
-            >(event, &source, &target, &fs, &db))
+            >(event, &source, &target, &fs, &db, None))
             .unwrap()
     }
 

@@ -102,6 +102,7 @@ async fn main() -> color_eyre::Result<()> {
             cli.target_dir.clone(),
             fs.clone(),
             db.clone(),
+            immich_sync.clone(),
         )
         .await?;
 
@@ -125,6 +126,7 @@ async fn main() -> color_eyre::Result<()> {
                 &cli.target_dir,
                 &fs,
                 &db,
+                immich_sync.as_ref(),
             )
             .await?;
             warn!("Filesystem watcher overloaded, re-scanning");

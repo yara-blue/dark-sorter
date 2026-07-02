@@ -7,6 +7,7 @@ use color_eyre::eyre::Context;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt};
 use futures_concurrency::future::TryJoin;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReadDirStream;
 
@@ -15,7 +16,7 @@ use crate::fs::{
 };
 use crate::watcher::{EyreWithPath, ResultExt};
 use crate::xmp::ParsedXmps;
-use crate::{ImageExporter, database};
+use crate::{ImageExporter, database, immich};
 
 pub mod preview;
 
@@ -24,6 +25,7 @@ pub async fn scan_clean_and_link<Exporter: ImageExporter>(
     target_dir: BaseTargetDir,
     fs: ThrottledFs,
     previously_exported: database::Db,
+    immich: Option<mpsc::Sender<immich::Event>>,
 ) -> color_eyre::Result<()> {
     let parsed_xmps = ParsedXmps::default();
     scan_clean_and_link_dir::<Exporter>(
@@ -32,6 +34,7 @@ pub async fn scan_clean_and_link<Exporter: ImageExporter>(
         fs,
         previously_exported,
         parsed_xmps,
+        immich,
     )
     .await
 }
@@ -43,6 +46,7 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
     fs: ThrottledFs,
     previously_exported: database::Db,
     parsed_xmps: ParsedXmps,
+    immich: Option<mpsc::Sender<immich::Event>>,
 ) -> color_eyre::Result<()> {
     let read_source = fs
         .read_dir(&source_dir)
@@ -110,6 +114,7 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
                 &fs,
                 &previously_exported,
                 &parsed_xmps,
+                &immich,
             )
         })
         .collect::<FuturesUnordered<_>>()
@@ -132,8 +137,15 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
         .await?;
 
     if previews.len() + n_preview_links_created == 0 {
-        // todo!("notify immich sync of empty dir so it can be removed from immich")
-        // TODO!
+        match tokio::fs::remove_dir(&target_dir).await {
+            Ok(()) => {
+                if let Some(tx) = immich {
+                    tx.send(immich::Event::EmptyDir(target_dir)).await?
+                }
+            }
+            Err(e) if e.kind() == ErrorKind::DirectoryNotEmpty => (),
+            Err(e) => Err(e)?,
+        }
     }
     Ok(())
 }
@@ -147,17 +159,20 @@ fn recurse_into_subdir<Exporter: ImageExporter>(
     fs: &ThrottledFs,
     previously_exported: &database::Db,
     parsed_xmps: &ParsedXmps,
+    immich: &Option<mpsc::Sender<immich::Event>>,
 ) -> JoinHandle<color_eyre::Result<()>> {
     let source = source.subdir(dir);
     let target = target.subdir(dir);
     let previously_exported = previously_exported.clone();
     let fs = fs.clone();
     let parsed_xmps = parsed_xmps.clone();
+    let immich = immich.clone();
     tokio::spawn(scan_clean_and_link_dir::<Exporter>(
         source,
         target,
         fs,
         previously_exported,
         parsed_xmps,
+        immich,
     ))
 }

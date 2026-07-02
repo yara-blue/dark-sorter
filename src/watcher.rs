@@ -1,4 +1,5 @@
 use std::hint::cold_path;
+use std::io::ErrorKind;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
@@ -15,7 +16,7 @@ use tracing::{debug, instrument};
 
 use crate::fs::{ThrottledFs, XmpFile};
 use crate::xmp::Xmp;
-use crate::{BaseSourceDir, BaseTargetDir, Db, ImageExporter};
+use crate::{BaseSourceDir, BaseTargetDir, Db, ImageExporter, immich};
 
 pub fn start(dir: BaseSourceDir) -> color_eyre::Result<Receiver<Kitty>> {
     if !caps::has_cap(None, CapSet::Permitted, Capability::CAP_SYS_ADMIN)
@@ -64,6 +65,7 @@ pub async fn handle_kitty_fs_change<Exporter: ImageExporter>(
     target: &BaseTargetDir,
     fs: &ThrottledFs,
     db: &Db,
+    immich: Option<&tokio::sync::mpsc::Sender<immich::Event>>,
 ) -> color_eyre::Result<()> {
     let xmp_file = event.xmp_file;
     let xmp = Xmp::read_from_file(&xmp_file, fs)
@@ -76,6 +78,16 @@ pub async fn handle_kitty_fs_change<Exporter: ImageExporter>(
     match event.event {
         KittyKind::FileDeleted | KittyKind::FileMovedFrom => {
             crate::scan::preview::clean_up(&preview)?;
+            let dir = preview.parent_dir();
+            match tokio::fs::remove_dir(&dir).await {
+                Ok(()) => {
+                    if let Some(tx) = immich {
+                        tx.send(immich::Event::EmptyDir(dir)).await?
+                    }
+                }
+                Err(e) if e.kind() == ErrorKind::DirectoryNotEmpty => (),
+                Err(e) => Err(e)?,
+            }
         }
         // Some tools move the changed file over the existing one
         // instead of opening it for writing. So a move to can actually edit

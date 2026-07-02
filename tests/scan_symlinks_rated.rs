@@ -26,6 +26,7 @@ fn rated_files_get_symlinked() {
             target.clone(),
             fs,
             cache,
+            None,
         ))
         .unwrap();
 
@@ -56,6 +57,7 @@ fn missing_jpeg_gets_created() {
             target.clone(),
             fs,
             cache,
+            None,
         ))
         .unwrap();
 
