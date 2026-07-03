@@ -6,8 +6,9 @@ use std::time::Instant;
 
 use crate::fs::BaseTargetDir;
 use crate::fs::TargetDir;
+use crate::immich::client::LibraryId;
 pub use client::ApiKey;
-use client::{Immich, Uuid};
+use client::Immich;
 
 use futures::FutureExt as _;
 use futures_concurrency::future::FutureExt;
@@ -44,16 +45,16 @@ pub async fn start_sync_daemon(
 pub enum Event {
     EmptyDir(TargetDir),
     NonEmptyDir(TargetDir),
-    PendingScan(Uuid),
+    PendingScan(LibraryId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct PendingScan {
     triggers_at: tokio::time::Instant,
-    library_id: Uuid,
+    library_id: LibraryId,
 }
 
-async fn next_pending(pending_scans: &mut BTreeSet<PendingScan>) -> Uuid {
+async fn next_pending(pending_scans: &mut BTreeSet<PendingScan>) -> LibraryId {
     if let Some(pending) = pending_scans.first() {
         tokio::time::sleep_until(pending.triggers_at).await;
     } else {
@@ -141,7 +142,7 @@ async fn add_managed_library(
 
 struct ManagedLibrary {
     // Library ID
-    id: Uuid,
+    id: LibraryId,
     // Paths immich checks for images
     import_path: TargetDir,
     // When did we last issue a scan?

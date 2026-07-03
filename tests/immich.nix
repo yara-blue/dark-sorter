@@ -7,7 +7,7 @@ pkgs.testers.runNixOSTest {
   enableDebugHook = true;
   sshBackdoor.enable = true;
   nodes.machine =
-    { ... }:
+    { pkgs, ... }:
     let
       helpers = import ./helpers.nix;
       raw = helpers.raw;
@@ -23,8 +23,12 @@ pkgs.testers.runNixOSTest {
         target-dir = "/target";
         photo-group = "photos";
         package = pkgs.dark-sorter-debug;
+        immich = {
+          url = "http://localhost:2283";
+          api-key = "magic_api_key_for_dark_sorter_testing";
+        };
       };
-      systemd.services.dark-sorter.enable = false;
+      # systemd.services.dark-sorter.enable = false;
       systemd.services.dark-sorter.environment = {
         RUST_BACKTRACE = "1";
         RUST_LOG = "debug";
@@ -32,9 +36,14 @@ pkgs.testers.runNixOSTest {
       services.immich = {
         enable = true;
         group = "photos";
-		machine-learning.enable = false;
+        machine-learning.enable = false;
+        package = pkgs.immich.overrideAttrs (old: {
+          patches = (old.patches or [ ]) ++ [
+            ./add_hardcoded_admin_and_api_key.patch
+          ];
+        });
       };
-	  networking.firewall.enable = false;
+      networking.firewall.enable = false;
       # We need these files to be present BEFORE dark-sorter starts running
       # or we'll just be testing the watcher
       # See man tmpfiles.d(5) for the syntax
@@ -52,16 +61,24 @@ pkgs.testers.runNixOSTest {
   # Methods available on machine objects:
   # https://nixos.org/manual/nixos/stable/index.html#ssec-machine-objects
   testScript = ''
-    import time
-    machine.wait_for_unit("default.target")
-    time.sleep(600)
+# import time
+# import json
 
-    # machine.succeed("curl http://127.0.0.1:2283")
+machine.wait_for_unit("default.target")
+machine.shell_interact()
 
-        # # scan should create preview for rated file
-        # machine.wait_until_succeeds("test -f /target/rated.jpg", 20)
-        #
-        # # scan should not create preview for unrated file
-        # machine.fail("test -f /target/unrated.jpg")
-  '';
+# libs = machine.wait_until_succeeds("curl http://localhost:2283/api/libraries -H x-api-key:magic_api_key_for_dark_sorter_testing")
+# libs = json.loads(libs)
+#
+# import_path = libs[0]["importPaths"][0]
+# assert import_path == "/target"
+#
+# machine.shell_interact()
+
+# # scan should create preview for rated file
+# machine.wait_until_succeeds("test -f /target/rated.jpg", 20)
+#
+# # scan should not create preview for unrated file
+# machine.fail("test -f /target/unrated.jpg")
+'';
 }

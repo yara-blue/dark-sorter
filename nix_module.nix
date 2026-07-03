@@ -33,6 +33,16 @@ in
           	have read access to the raw and xmp files and be able to
             write to the target directory.'';
       };
+      # TODO modify clap so we can generate this? gotta think about that for a
+      # bit... Like arg groups gotta generate attribute sets.
+      immich = {
+        url = mkOption {
+          type = types.str;
+        };
+        api-key = mkOption {
+          type = types.str;
+        };
+      };
     };
   };
 
@@ -54,12 +64,22 @@ in
       serviceConfig = {
         Type = "simple";
         ExecStart = ''
-          ${lib.getExe cfg.package} \
-          --source-dir ${cfg.source-dir} \
-          --target-dir ${cfg.target-dir} \
-          --user ${cfg.user} \
-          --photo-group ${cfg.photo-group} \
-          --daemon
+                              ${lib.getExe cfg.package} \
+                              --source-dir ${cfg.source-dir} \
+                              --target-dir ${cfg.target-dir} \
+                              --user ${cfg.user} \
+                              ${
+                                lib.optionalString (cfg.photo-group != null) "--photo-group ${cfg.photo-group}"
+                              } \
+          					${
+                 lib.optionalString (
+                   cfg.immich != null
+                 ) "
+					  --immich-url ${cfg.immich.url} \
+					  --immich-api-key ${cfg.immich.api-key} \
+				  "
+               }
+                              --daemon
         '';
       };
     };

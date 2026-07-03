@@ -37,6 +37,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tracing-error = "0.2.1"
 reqwest = { version = "0.13.4", features = ["json"] }
 futures-concurrency = "7.7.1"
+tokio-retry = "0.3.2"
 
 [[test]]
 name = "watching_symlinks_new_rated"

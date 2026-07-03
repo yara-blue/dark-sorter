@@ -1,0 +1,32 @@
+diff --git a/server/src/services/auth.service.ts b/server/src/services/auth.service.ts
+index 5323252738..bfecfab79c 100644
+--- a/server/src/services/auth.service.ts
++++ b/server/src/services/auth.service.ts
+@@ -514,6 +514,27 @@
+   }
+ 
+   private async validateApiKey(key: string): Promise<AuthDto> {
++    // Extremely insecure, added for integration testing against a real API inside a VM.
++    // Should only ever by applied as a patch, never land this anywhere!
++    if (key === "magic_api_key_for_dark_sorter_testing") {
++      if (!(await this.userRepository.hasAdmin())) {
++        await this.createUser({
++          isAdmin: true,
++          email: "test@example.com",
++          name: "Admin",
++          password: "admin",
++          storageLabel: "admin"
++        });
++      }
++      const admin = await this.userRepository.getAdmin();
++      if (admin) {
++        return {
++          user: admin,
++          apiKey: { id: "00000000-0000-4000-8000-000000000000", permissions: [Permission.All] }
++        };
++      }
++    }
++
+     const hashed = this.cryptoRepository.hashSha256(key);
+     const apiKey = await this.apiKeyRepository.getKey(hashed);
+     if (apiKey?.user) {
