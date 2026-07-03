@@ -16,7 +16,7 @@ rec {
     pkgs = pkgs;
     nixosModule = nixosModule;
   };
-  immich = import ./tests/immich.nix {
+  immich = import ./tests/immich_integration.nix {
     pkgs = pkgs;
     nixosModule = nixosModule;
   };
