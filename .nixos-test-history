@@ -178,3 +178,9 @@
 
 # 2026-07-03 15:21:55.333304
 +test_script()
+
+# 2026-07-04 11:01:06.478177
++machine.shell_interact
+
+# 2026-07-04 11:01:08.760154
++machine.shell_interact()

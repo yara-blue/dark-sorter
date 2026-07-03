@@ -1,6 +1,10 @@
+use std::path::PathBuf;
+
 use clap::{Parser, ValueHint};
-use color_eyre::eyre::OptionExt;
+use color_eyre::Section;
+use color_eyre::eyre::{Context, OptionExt};
 use dark_sorter::immich::ImmichSync;
+use dark_sorter::watcher::EyreWithPath;
 use dark_sorter::{
     BaseSourceDir, BaseTargetDir, DarktableCli, Db, ThrottledFs, immich, running_as_root,
     scan_clean_and_link, watcher,
@@ -37,14 +41,26 @@ struct Cli {
     photo_group: Option<String>,
 
     /// Refresh library on this immich instance
-    #[arg(short, long, requires = "immich_api_key", value_hint=ValueHint::Url)]
+    #[arg(long, group = "url", requires = "api_key", value_hint=ValueHint::Url)]
     immich_url: Option<Url>,
 
-    /// API key for th immich instance
-    /// Get it here: https://my.immich.app/user-settings?isOpen=api-keys
-    /// It needs: library.create, library.update, library.read, library.delete & users.read,  
-    #[arg(short = 'a', long, requires = "immich_url")]
+    /// Refresh library on this immich instance
+    #[arg(long, group = "url", requires = "api_key", value_hint=ValueHint::FilePath)]
+    immich_url_path: Option<PathBuf>,
+
+    /// API key for the immich instance. Get it here:
+    /// `https://my.immich.app/user-settings?isOpen=api-keys`. The API key needs
+    /// permissions: library.create, library.update, library.read,
+    /// library.delete & users.read,  
+    #[arg(short = 'a', long, group = "api_key", requires = "url")]
     immich_api_key: Option<immich::ApiKey>,
+
+    /// File containing the API key for the immich instance. Get it here:
+    /// `https://my.immich.app/user-settings?isOpen=api-keys`. The API key needs
+    /// permissions: library.create, library.update, library.read,
+    /// library.delete & users.read,  
+    #[arg(long, group = "api_key", requires = "url", value_hint=ValueHint::FilePath)]
+    immich_api_key_path: Option<PathBuf>,
 
     /// Watch files after scan, requires dark-sorter to run as root.
     #[arg(short, long)]
@@ -88,10 +104,39 @@ async fn main() -> color_eyre::Result<()> {
         .daemon
         .then_some(watcher::start(cli.source_dir.clone())?);
 
-    let immich_sync = match (cli.immich_url, cli.immich_api_key) {
-        (None, None) => None,
-        (Some(url), Some(api_key)) => Some(ImmichSync::start(url, api_key, &cli.target_dir).await?),
-        (None, Some(_)) | (Some(_), None) => unreachable!("from the same arg group"),
+    let url = cli
+        .immich_url_path
+        .map(|path| {
+            let url = std::fs::read_to_string(&path)
+                .wrap_err("Failed to read file")
+                .note_path(path)?;
+            Url::parse(&url)
+                .wrap_err("Content of file is not a url")
+                .with_note(|| format!("file content: `{url}`"))
+        })
+        .transpose()
+        .wrap_err("Could not read Immich url from file")?
+        .or(cli.immich_url);
+
+    let api_key = cli
+        .immich_api_key_path
+        .map(|path| {
+            std::fs::read_to_string(&path)
+                .wrap_err("Could not read Immich API key from file")
+                .note_path(path)
+        })
+        .transpose()?
+        .map(immich::ApiKey)
+        .or(cli.immich_api_key);
+
+    let immich_sync = if let Some((url, api_key)) = url.zip(api_key) {
+        Some(
+            ImmichSync::start(url, api_key, &cli.target_dir)
+                .await
+                .wrap_err("Could not start immich sync")?,
+        )
+    } else {
+        None
     };
 
     let mut first_scan = true;

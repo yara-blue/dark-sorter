@@ -29,12 +29,8 @@ mod client;
 
 fn name_for_dir(dir: &TargetDir, base_dir: &BaseTargetDir) -> String {
     format!(
-        "x-dark-sorter-{}", // x: to get these to the bottom of the list in immich
-        dir.0
-            .0
-            .strip_prefix(&base_dir.0.0)
-            .expect("dir was a full path so includes target_dir")
-            .display()
+        "z-dark-sorter:/{}", // z: to get these to the bottom of any alphabetical list
+        dir.relative_to_base(base_dir).display()
     )
 }
 

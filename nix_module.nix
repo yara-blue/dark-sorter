@@ -36,11 +36,22 @@ in
       # TODO modify clap so we can generate this? gotta think about that for a
       # bit... Like arg groups gotta generate attribute sets.
       immich = {
+        # TODO do some validation to make sure only one of these is present
         url = mkOption {
-          type = types.str;
-        };
+          type = types.nullOr types.str;
+		  default = null;
+		};
+        url-path = mkOption {
+          type = types.nullOr types.path;
+		  default = null;
+		};
         api-key = mkOption {
-          type = types.str;
+          type = types.nullOr types.str;
+          default = null;
+        };
+        api-key-path = mkOption {
+          type = types.nullOr types.path;
+          default = null;
         };
       };
     };
@@ -49,7 +60,6 @@ in
   config = mkIf cfg.enable {
     users.users.${cfg.user} = {
       isSystemUser = true;
-      useDefaultShell = true; # TODO remove
       description = "User to run darktable under";
       group = "${cfg.photo-group}";
     };
@@ -63,15 +73,33 @@ in
       serviceConfig = {
         Type = "simple";
         ExecStart = ''
-${lib.getExe cfg.package} \
---source-dir ${cfg.source-dir} \
---target-dir ${cfg.target-dir} \
---user ${cfg.user} \
-${lib.optionalString (cfg.photo-group != null) "--photo-group ${cfg.photo-group}"} \
-${lib.optionalString (cfg.immich != null) "--immich-url ${cfg.immich.url}"} \
-${lib.optionalString (cfg.immich != null) "--immich-api-key ${cfg.immich.api-key}"} \
---daemon
-'';
+          ${lib.getExe cfg.package} \
+          --source-dir ${cfg.source-dir} \
+          --target-dir ${cfg.target-dir} \
+          --user ${cfg.user} \
+          ${lib.optionalString (cfg.photo-group != null) "--photo-group ${cfg.photo-group}"} \
+          ${
+            lib.optionalString (
+              cfg.immich != null && cfg.immich.url != null
+            ) "--immich-url ${cfg.immich.url}"
+          } \
+          ${
+            lib.optionalString (
+              cfg.immich != null && cfg.immich.url-path != null
+            ) "--immich-url-path ${cfg.immich.url-path}"
+          } \
+          ${
+            lib.optionalString (
+              cfg.immich != null && cfg.immich.api-key != null
+            ) "--immich-api-key ${cfg.immich.api-key}"
+          } \
+          ${
+            lib.optionalString (
+              cfg.immich != null && cfg.immich.api-key-path != null
+            ) "--immich-api-key-path ${cfg.immich.api-key-path}"
+          } \
+          --daemon
+        '';
       };
     };
   };
