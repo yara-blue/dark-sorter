@@ -6,13 +6,13 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use crate::watcher::EyreWithPath;
-use color_eyre::Section;
 use color_eyre::eyre::{Context, OptionExt};
 use reqwest::{Method, StatusCode, Url};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio_retry::strategy::ExponentialBackoff;
+use tracing::{debug, instrument, warn};
 
 /// There are way more fields but we ignore those
 #[derive(Debug, Deserialize)]
@@ -31,7 +31,7 @@ pub struct Library {
 /// There are way more fields but we ignore those
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct User {
+struct User {
     // User id,
     id: UserId,
 }
@@ -68,11 +68,21 @@ impl fmt::Debug for ApiKey {
     }
 }
 
+#[derive(Clone)]
 pub struct Immich {
     api_url: Url,
     api_key: ApiKey,
     client: reqwest::Client,
     pub id: UserId,
+}
+
+impl fmt::Debug for Immich {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Immich")
+            .field("api_url", &self.api_url.as_str())
+            .field("id", &self.id)
+            .finish()
+    }
 }
 
 macro_rules! uuid_wrapper {
@@ -107,94 +117,73 @@ pub enum RetryError<E: Error> {
 async fn retry<T, E: Error + CanBeRecoverable>(
     mut operation: impl AsyncFnMut() -> Result<T, E>,
 ) -> Result<T, RetryError<E>> {
-    let backoff = ExponentialBackoff::from_millis(100).max_delay(Duration::from_mins(1));
-    for i in backoff {
+    let mut not_warned = true;
+    let backoff = ExponentialBackoff::from_millis(100)
+        .max_delay(Duration::from_millis(500))
+        .take(60)
+        .chain(ExponentialBackoff::from_millis(500).max_delay(Duration::from_mins(1)));
+    for period in backoff {
         match (operation)().await {
             Ok(v) => return Ok(v),
             Err(e) if e.is_recoverable() => (),
             Err(e) => return Err(RetryError::Unrecoverable(e)),
         }
-        tokio::time::sleep(i).await;
+        tokio::time::sleep(period).await;
+        if period > Duration::from_secs(5) {
+            if not_warned {
+                warn!("Retrying");
+                not_warned = false;
+            } else {
+                debug!("Retrying");
+            }
+        }
     }
     Err(RetryError::TimedOut)
 }
 
-// TODO retry logic (for if immich restarts or isn't up yet etc..)
-
 impl Immich {
+    #[instrument(skip_all, fields(url = %base_url))]
     pub(super) async fn new(base_url: Url, api_key: ApiKey) -> color_eyre::Result<Self> {
-        let mut client = reqwest::Client::new();
         let api_url = base_url
             .join("api/")
             .wrap_err("immich url was not well formed")?;
-        let get_user = async || get_api_key_user(&mut client, &base_url, &api_key).await;
-        let user = retry(get_user).await?;
 
-        Ok(Self {
+        let mut this = Self {
             client: reqwest::Client::new(),
             api_url,
             api_key,
-            id: user.id,
-        })
+            id: UserId::ZERO,
+        };
+
+        let get_current_user = async || this.http_request(Method::GET, "users/me").await;
+        let user: User = retry(get_current_user)
+            .await
+            .wrap_err("Could not get user corresponding to this API key")?;
+        this.id = user.id;
+
+        Ok(this)
     }
 
+    #[instrument(skip(self))]
     pub(super) async fn get_all_libraries(&self) -> color_eyre::Result<Vec<Library>> {
-        let get = async || self.http_request(Method::GET, ["libraries"]).await;
-        retry(get).await.wrap_err("Could not get all libraries")
-    }
-
-    async fn http_request<const N: usize, T: DeserializeOwned>(
-        &self,
-        method: Method,
-        url: [&str; N],
-    ) -> Result<T, ApiError> {
-        let url = url.into_iter().fold(self.api_url.clone(), |url, e| {
-            url.join(e)
-                .expect("In Self::new we already check the passed in Url")
-        });
-        let response = self
-            .client
-            .request(method, url)
-            .header("x-api-key", &self.api_key.0)
-            .send()
+        let get_all_libraries = async || self.http_request(Method::GET, "libraries").await;
+        retry(get_all_libraries)
             .await
-            .map_err(ApiError::FailedToSend)?;
-
-        if response.status().is_success() {
-            response.json::<T>().await.map_err(ApiError::InvalidJson)
-        } else {
-            Err(ApiError::BadStatus(response.status()))
-        }
+            .wrap_err("Could not get all libraries")
     }
 
+    #[instrument(skip(self))]
     pub(super) async fn update_library(&self, id: &LibraryId) -> color_eyre::Result<()> {
-        let url = self
-            .api_url
-            .join("libraries/")
-            .unwrap()
-            .join(&format!("{id}/"))
-            .unwrap()
-            .join("scan")
-            .unwrap();
-        let response = self
-            .client
-            .post(url)
-            .header("x-api-key", &self.api_key.0)
-            .send()
+        let update_library = async || {
+            self.http_request(Method::POST, &format!("libraries/{id}/scan"))
+                .await
+        };
+        retry(update_library)
             .await
-            .unwrap();
-
-        if let Err(e) = response.error_for_status_ref() {
-            if let Ok(text) = response.text().await {
-                Err(e).note(text)
-            } else {
-                Err(e).wrap_err("Got bad status code without any body")
-            }
-        } else {
-            Ok(())
-        }
+            .wrap_err("Could not update library")
     }
 
+    #[instrument(skip_all, fields(name = name, path = ?path.as_ref().display()))]
     pub(super) async fn create_library(
         &self,
         exclusion_patterns: Vec<String>,
@@ -213,50 +202,72 @@ impl Immich {
             name,
             owner_id: self.id.clone(),
         };
-
-        let response = self
-            .client
-            .post(self.api_url.join("libraries").unwrap())
-            .header("x-api-key", &self.api_key.0)
-            .json(&request)
-            .send()
+        let create_library = async || {
+            self.http_request_with_body(Method::POST, "libraries", &request)
+                .await
+        };
+        retry(create_library)
             .await
-            .unwrap();
-
-        if let Err(e) = response.error_for_status_ref() {
-            if let Ok(text) = response.text().await {
-                Err(e).note(text)
-            } else {
-                Err(e).wrap_err("Got bad status code without any body")
-            }
-        } else {
-            Ok(response.json().await?)
-        }
+            .wrap_err("Could not create library")
     }
 
+    #[instrument(skip(self))]
     pub(crate) async fn delete_library(&self, id: &LibraryId) -> color_eyre::Result<()> {
+        let delete_library = async || {
+            self.http_request(Method::DELETE, &format!("libraries/{id}"))
+                .await
+        };
+        retry(delete_library)
+            .await
+            .wrap_err("Could not create library")
+    }
+
+    #[instrument(skip_all, fields(method=%method, url))]
+    async fn http_request<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        url: &str,
+    ) -> Result<T, ApiError> {
+        self.http_request_inner(method, url, None::<&()>).await
+    }
+
+    #[instrument(skip_all, fields(method=%method, url))]
+    async fn http_request_with_body<B: Serialize, T: DeserializeOwned>(
+        &self,
+        method: Method,
+        url: &str,
+        body: &B,
+    ) -> Result<T, ApiError> {
+        self.http_request_inner(method, url, Some(body)).await
+    }
+
+    #[instrument(skip_all, fields(method=%method, url))]
+    async fn http_request_inner<B: Serialize, T: DeserializeOwned>(
+        &self,
+        method: Method,
+        url: &str,
+        body: Option<&B>,
+    ) -> Result<T, ApiError> {
         let url = self
             .api_url
-            .join("libraries/")
-            .unwrap()
-            .join(&format!("{id}/"))
-            .unwrap();
-        let response = self
+            .join(url)
+            .expect("In Self::new we already check the passed in Url");
+        tracing::Span::current().record("url", url.as_str());
+        let request = self
             .client
-            .delete(url)
-            .header("x-api-key", &self.api_key.0)
-            .send()
-            .await
-            .unwrap();
-
-        if let Err(e) = response.error_for_status_ref() {
-            if let Ok(text) = response.text().await {
-                Err(e).note(text)
-            } else {
-                Err(e).wrap_err("Got bad status code without any body")
-            }
+            .request(method, url)
+            .header("x-api-key", self.api_key.0.clone());
+        let request = if let Some(body) = body {
+            request.json(body)
         } else {
-            Ok(())
+            request
+        };
+        let response = request.send().await.map_err(ApiError::FailedToSend)?;
+
+        if response.status().is_success() {
+            response.json::<T>().await.map_err(ApiError::InvalidJson)
+        } else {
+            Err(ApiError::BadStatus(response.status()))
         }
     }
 }
@@ -293,24 +304,5 @@ impl CanBeRecoverable for ApiError {
             ApiError::BadStatus(_) => true,
             ApiError::InvalidJson(_) => false,
         }
-    }
-}
-
-async fn get_api_key_user(
-    client: &mut reqwest::Client,
-    base_url: &Url,
-    api_key: &ApiKey,
-) -> Result<User, ApiError> {
-    let response = client
-        .get(base_url.join("users/me").unwrap())
-        .header("x-api-key", &api_key.0)
-        .send()
-        .await
-        .map_err(ApiError::FailedToSend)?;
-
-    if response.status().is_success() {
-        response.json::<User>().await.map_err(ApiError::InvalidJson)
-    } else {
-        Err(ApiError::BadStatus(response.status()))
     }
 }

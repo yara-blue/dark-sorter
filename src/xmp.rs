@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use color_eyre::eyre::Context;
 use tokio::sync::Notify;
-use tracing::debug;
 
 use crate::fs::{PreviewFile, RawFile, SourceDir, TargetDir, ThrottledFs, XmpFile};
 use crate::watcher::EyreWithPath;
@@ -69,14 +68,12 @@ impl ParsedXmps {
                 }
             }
             None => {
-                debug!("reading in xmp");
                 let res = Xmp::read_from_file(path, fs).await;
                 let new_state = match res.clone() {
                     Ok(xmp) => XmpState::Loaded(xmp),
                     Err(e) => XmpState::Error(e),
                 };
                 *self.0.lock().get_mut(path).expect("we inserted Loading") = new_state;
-                debug!("done reading in, update xmp: {self:?}");
                 notify.notify_waiters();
                 res
             }

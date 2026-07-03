@@ -7,16 +7,16 @@ use color_eyre::eyre::Context;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt};
 use futures_concurrency::future::TryJoin;
-use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReadDirStream;
 
 use crate::fs::{
     BaseSourceDir, BaseTargetDir, DirName, PreviewFile, SourceDir, TargetDir, ThrottledFs, XmpFile,
 };
+use crate::immich::ImmichSync;
 use crate::watcher::{EyreWithPath, ResultExt};
 use crate::xmp::ParsedXmps;
-use crate::{ImageExporter, database, immich};
+use crate::{ImageExporter, database};
 
 pub mod preview;
 
@@ -25,7 +25,7 @@ pub async fn scan_clean_and_link<Exporter: ImageExporter>(
     target_dir: BaseTargetDir,
     fs: ThrottledFs,
     previously_exported: database::Db,
-    immich: Option<mpsc::Sender<immich::Event>>,
+    immich: Option<ImmichSync>,
 ) -> color_eyre::Result<()> {
     let parsed_xmps = ParsedXmps::default();
     scan_clean_and_link_dir::<Exporter>(
@@ -39,14 +39,14 @@ pub async fn scan_clean_and_link<Exporter: ImageExporter>(
     .await
 }
 
-#[tracing::instrument(skip(fs, previously_exported))]
+#[tracing::instrument(skip(fs, previously_exported, immich))]
 async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
     source_dir: SourceDir,
     target_dir: TargetDir,
     fs: ThrottledFs,
     previously_exported: database::Db,
     parsed_xmps: ParsedXmps,
-    immich: Option<mpsc::Sender<immich::Event>>,
+    immich: Option<ImmichSync>,
 ) -> color_eyre::Result<()> {
     let read_source = fs
         .read_dir(&source_dir)
@@ -139,13 +139,15 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
     if previews.len() + n_preview_links_created == 0 {
         match tokio::fs::remove_dir(&target_dir).await {
             Ok(()) => {
-                if let Some(tx) = immich {
-                    tx.send(immich::Event::EmptyDir(target_dir)).await?
+                if let Some(immich) = immich {
+                    immich.set_dir_empty(target_dir);
                 }
             }
             Err(e) if e.kind() == ErrorKind::DirectoryNotEmpty => (),
             Err(e) => Err(e)?,
         }
+    } else if let Some(immich) = immich {
+        immich.set_dir_not_empty(target_dir);
     }
     Ok(())
 }
@@ -159,7 +161,7 @@ fn recurse_into_subdir<Exporter: ImageExporter>(
     fs: &ThrottledFs,
     previously_exported: &database::Db,
     parsed_xmps: &ParsedXmps,
-    immich: &Option<mpsc::Sender<immich::Event>>,
+    immich: &Option<ImmichSync>,
 ) -> JoinHandle<color_eyre::Result<()>> {
     let source = source.subdir(dir);
     let target = target.subdir(dir);

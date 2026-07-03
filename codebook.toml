@@ -7,7 +7,9 @@ words = [
     "fds",
     "fsid",
     "immich",
+    "mpsc's",
     "mrrow",
+    "rescan",
     "xmp",
     "xmps",
 ]

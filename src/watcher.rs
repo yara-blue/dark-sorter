@@ -15,8 +15,9 @@ use libc::FAN_CLOSE_WRITE;
 use tracing::{debug, instrument};
 
 use crate::fs::{ThrottledFs, XmpFile};
+use crate::immich::ImmichSync;
 use crate::xmp::Xmp;
-use crate::{BaseSourceDir, BaseTargetDir, Db, ImageExporter, immich};
+use crate::{BaseSourceDir, BaseTargetDir, Db, ImageExporter};
 
 pub fn start(dir: BaseSourceDir) -> color_eyre::Result<Receiver<Kitty>> {
     if !caps::has_cap(None, CapSet::Permitted, Capability::CAP_SYS_ADMIN)
@@ -58,14 +59,14 @@ pub fn start(dir: BaseSourceDir) -> color_eyre::Result<Receiver<Kitty>> {
     Ok(rx)
 }
 
-#[instrument(skip(source, target, fs))]
+#[instrument(skip(source, target, fs, immich))]
 pub async fn handle_kitty_fs_change<Exporter: ImageExporter>(
     event: Kitty,
     source: &BaseSourceDir,
     target: &BaseTargetDir,
     fs: &ThrottledFs,
     db: &Db,
-    immich: Option<&tokio::sync::mpsc::Sender<immich::Event>>,
+    immich: Option<&ImmichSync>,
 ) -> color_eyre::Result<()> {
     let xmp_file = event.xmp_file;
     let xmp = Xmp::read_from_file(&xmp_file, fs)
@@ -80,11 +81,8 @@ pub async fn handle_kitty_fs_change<Exporter: ImageExporter>(
             crate::scan::preview::clean_up(&preview)?;
             let dir = preview.parent_dir();
             match tokio::fs::remove_dir(&dir).await {
-                Ok(()) => {
-                    if let Some(tx) = immich {
-                        tx.send(immich::Event::EmptyDir(dir)).await?
-                    }
-                }
+                Ok(()) if let Some(immich) = immich => immich.set_dir_empty(dir),
+                Ok(()) => (),
                 Err(e) if e.kind() == ErrorKind::DirectoryNotEmpty => (),
                 Err(e) => Err(e)?,
             }
@@ -93,10 +91,15 @@ pub async fn handle_kitty_fs_change<Exporter: ImageExporter>(
         // instead of opening it for writing. So a move to can actually edit
         // the rating.
         KittyKind::FileModificationComplete | KittyKind::FileMovedTo => {
-            crate::scan::preview::create_update_or_clean_one::<Exporter>(
+            let created = crate::scan::preview::create_update_or_clean_one::<Exporter>(
                 xmp, &xmp_file, source, target, fs, db,
             )
             .await?;
+            if let Some(immich) = immich
+                && created > 0
+            {
+                immich.set_dir_not_empty(preview.parent_dir());
+            }
         }
     }
 

@@ -116,17 +116,17 @@ pub(crate) async fn create_update_or_clean_one<Exporter: ImageExporter>(
     let input_file = xmp.raw_file(source);
     let output_file = xmp.preview_file(&target);
     if let Some(current_edits) = xmp.edits
-        && let Some(exported_edits) = previously_exported.get(&xmp_file)
+        && let Some(exported_edits) = previously_exported.get(xmp_file)
         && current_edits != exported_edits
         && xmp.rated()
     {
-        Exporter::export(&xmp_file, &input_file, &output_file, fs)
+        Exporter::export(xmp_file, &input_file, &output_file, fs)
             .await
             .wrap_err("failed to update preview")?;
         previously_exported.insert(xmp_file.clone(), current_edits);
         Ok(1)
     } else if xmp.rated() && xmp.preview_missing(target).await? {
-        Exporter::export(&xmp_file, &input_file, &output_file, fs)
+        Exporter::export(xmp_file, &input_file, &output_file, fs)
             .await
             .wrap_err("failed to create preview")?;
         previously_exported.insert(xmp_file.clone(), xmp.edits.unwrap_or(EditHash::NO_EDITS));
@@ -139,7 +139,6 @@ pub(crate) async fn create_update_or_clean_one<Exporter: ImageExporter>(
 
 #[instrument]
 pub fn clean_up(preview: &PreviewFile) -> Result<(), color_eyre::eyre::Error> {
-    debug!("removing preview file");
     std::fs::remove_file(preview)
         .ignore_err_if(|e| e.kind() == ErrorKind::NotFound, ())
         .wrap_err("Could not remove preview jpg")

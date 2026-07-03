@@ -168,9 +168,9 @@ impl ImageExporter for FakeJpgExporter {
         output_file: &PreviewFile,
         fs: &crate::fs::ThrottledFs,
     ) -> color_eyre::Result<()> {
-        std::fs::write(&output_file, RATED_PREVIEW_JPEG_CONTENT)
+        std::fs::write(output_file, RATED_PREVIEW_JPEG_CONTENT)
             .wrap_err("Failed to write fake jpeg")
-            .note_path(&output_file)?;
+            .note_path(output_file)?;
         std::os::unix::fs::chown(output_file, Some(fs.user), Some(fs.group))
             .wrap_err("Failed to set user and group for fake jpg file")
     }

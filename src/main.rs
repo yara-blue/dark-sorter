@@ -1,5 +1,6 @@
 use clap::{Parser, ValueHint};
 use color_eyre::eyre::OptionExt;
+use dark_sorter::immich::ImmichSync;
 use dark_sorter::{
     BaseSourceDir, BaseTargetDir, DarktableCli, Db, ThrottledFs, immich, running_as_root,
     scan_clean_and_link, watcher,
@@ -36,13 +37,13 @@ struct Cli {
     photo_group: Option<String>,
 
     /// Refresh library on this immich instance
-    #[arg(short, long, group = "immich", value_hint=ValueHint::Url)]
+    #[arg(short, long, requires = "immich_api_key", value_hint=ValueHint::Url)]
     immich_url: Option<Url>,
 
     /// API key for th immich instance
     /// Get it here: https://my.immich.app/user-settings?isOpen=api-keys
     /// It needs: library.create, library.update, library.read, library.delete & users.read,  
-    #[arg(short = 'a', long, group = "immich")]
+    #[arg(short = 'a', long, requires = "immich_url")]
     immich_api_key: Option<immich::ApiKey>,
 
     /// Watch files after scan, requires dark-sorter to run as root.
@@ -89,9 +90,7 @@ async fn main() -> color_eyre::Result<()> {
 
     let immich_sync = match (cli.immich_url, cli.immich_api_key) {
         (None, None) => None,
-        (Some(url), Some(api_key)) => {
-            Some(immich::start_sync_daemon(url, api_key, &cli.target_dir).await?)
-        }
+        (Some(url), Some(api_key)) => Some(ImmichSync::start(url, api_key, &cli.target_dir).await?),
         (None, Some(_)) | (Some(_), None) => unreachable!("from the same arg group"),
     };
 
@@ -118,6 +117,12 @@ async fn main() -> color_eyre::Result<()> {
             if event.overflow {
                 warn!("watcher overflowed");
                 let _ = event_rx.try_iter().count();
+                break;
+            }
+            if let Some(ref immich_sync) = immich_sync
+                && immich_sync.needs_rescan()
+            {
+                warn!("immich sync overflowed and has recovered, re-scanning");
                 break;
             }
             watcher::handle_kitty_fs_change::<DarktableCli>(

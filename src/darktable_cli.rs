@@ -44,14 +44,14 @@ pub async fn export(
         .expect("static semaphore can not be closed");
 
     debug!("Exporting image: {input_file}");
-    asses_file_state(&input_file, &output_file, fs).await?;
+    asses_file_state(input_file, output_file, fs).await?;
 
     let output = process::Command::new("nice")
         .arg("--adjustment=19")
         .arg("darktable-cli")
-        .arg(&input_file)
+        .arg(input_file)
         .arg(xmp_file)
-        .arg(&output_file)
+        .arg(output_file)
         .arg("--core")
         .arg("--library")
         .arg(":memory:") // don't create a darktable library file
