@@ -31,11 +31,18 @@ pkgs.testers.runNixOSTest {
       # systemd.services.dark-sorter.enable = false;
       systemd.services.dark-sorter.environment = {
         RUST_BACKTRACE = "1";
-        RUST_LOG = "debug";
+        RUST_LOG = "info,dark_sorter=debug";
       };
       services.immich = {
         enable = true;
         group = "photos";
+		settings = {
+			library.scan.enabled = false;
+			library.watch.enabled = false;
+			machineLearning.enabled = false;
+			# logging.enabled = false;
+			# logging.level = "Warn";
+		};
         machine-learning.enable = false;
         package = pkgs.immich.overrideAttrs (old: {
           patches = (old.patches or [ ]) ++ [
@@ -62,16 +69,20 @@ pkgs.testers.runNixOSTest {
   # https://nixos.org/manual/nixos/stable/index.html#ssec-machine-objects
   testScript = ''
 # import time
-# import json
+import json
 
-machine.wait_for_unit("default.target")
-machine.shell_interact()
+machine.wait_for_open_port(2283) # immich is ready
+machine.wait_until_succeeds("test -f /target/rated.jpg", timeout=60)
+libs = machine.wait_until_succeeds("curl --fail --silent http://localhost:2283/api/libraries -H x-api-key:magic_api_key_for_dark_sorter_testing", timeout=20)
+libs = json.loads(libs)
 
-# libs = machine.wait_until_succeeds("curl http://localhost:2283/api/libraries -H x-api-key:magic_api_key_for_dark_sorter_testing")
-# libs = json.loads(libs)
-#
-# import_path = libs[0]["importPaths"][0]
-# assert import_path == "/target"
+import_path = libs[0]["importPaths"][0]
+machine.log(import_path)
+print(f"**************************** {import_path}")
+assert import_path == "/target"
+machine.log("test done")
+print("******************************")
+machine.shutdown()
 #
 # machine.shell_interact()
 

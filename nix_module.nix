@@ -54,7 +54,6 @@ in
       group = "${cfg.photo-group}";
     };
     users.groups.${cfg.photo-group} = { };
-    # pkgs.dark-sorter.debug = true; // TODO make this work
 
     systemd.services.dark-sorter = {
       description = "Maintains a sibling folder structure of symlinks";
@@ -64,23 +63,15 @@ in
       serviceConfig = {
         Type = "simple";
         ExecStart = ''
-                              ${lib.getExe cfg.package} \
-                              --source-dir ${cfg.source-dir} \
-                              --target-dir ${cfg.target-dir} \
-                              --user ${cfg.user} \
-                              ${
-                                lib.optionalString (cfg.photo-group != null) "--photo-group ${cfg.photo-group}"
-                              } \
-          					${
-                 lib.optionalString (
-                   cfg.immich != null
-                 ) "
-					  --immich-url ${cfg.immich.url} \
-					  --immich-api-key ${cfg.immich.api-key} \
-				  "
-               }
-                              --daemon
-        '';
+${lib.getExe cfg.package} \
+--source-dir ${cfg.source-dir} \
+--target-dir ${cfg.target-dir} \
+--user ${cfg.user} \
+${lib.optionalString (cfg.photo-group != null) "--photo-group ${cfg.photo-group}"} \
+${lib.optionalString (cfg.immich != null) "--immich-url ${cfg.immich.url}"} \
+${lib.optionalString (cfg.immich != null) "--immich-api-key ${cfg.immich.api-key}"} \
+--daemon
+'';
       };
     };
   };
