@@ -115,14 +115,14 @@ async fn main() -> color_eyre::Result<()> {
 
         for event in event_rx {
             if event.overflow {
-                warn!("watcher overflowed");
+                warn!("Filesystem watcher overloaded, re-scanning");
                 let _ = event_rx.try_iter().count();
                 break;
             }
             if let Some(ref immich_sync) = immich_sync
                 && immich_sync.needs_rescan()
             {
-                warn!("immich sync overflowed and has recovered, re-scanning");
+                warn!("Immich sync overflowed and has recovered, re-scanning");
                 break;
             }
             watcher::handle_kitty_fs_change::<DarktableCli>(
@@ -134,7 +134,6 @@ async fn main() -> color_eyre::Result<()> {
                 immich_sync.as_ref(),
             )
             .await?;
-            warn!("Filesystem watcher overloaded, re-scanning");
         }
     }
 }

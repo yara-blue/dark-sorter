@@ -60,6 +60,8 @@ pkgs.testers.runNixOSTest {
 
         "C /source/rated.NEF 770 root photos - ${raw}"
         "C /source/rated.NEF.xmp 770 root photos - ${xmp "rated" 4}"
+        "C /rated2.NEF 770 root photos - ${raw}"
+        "C /rated2.NEF.xmp 770 root photos - ${xmp "rated2" 4}"
         "C /source/unrated.NEF 770 root photos - ${raw}"
         "C /source/unrated.NEF.xmp 770 root photos - ${xmp "unrated" 0}"
       ];
@@ -68,28 +70,43 @@ pkgs.testers.runNixOSTest {
   # Methods available on machine objects:
   # https://nixos.org/manual/nixos/stable/index.html#ssec-machine-objects
   testScript = ''
-# import time
+from time import sleep
 import json
 
+# SETUP
 machine.wait_for_open_port(2283) # immich is ready
 machine.wait_until_succeeds("test -f /target/rated.jpg", timeout=60)
+sleep(1) # give dark-sorter time to create immich library
+
+
+# TEST 1: should create an immich library
 libs = machine.wait_until_succeeds("curl --fail --silent http://localhost:2283/api/libraries -H x-api-key:magic_api_key_for_dark_sorter_testing", timeout=20)
 libs = json.loads(libs)
 
 import_path = libs[0]["importPaths"][0]
-machine.log(import_path)
-print(f"**************************** {import_path}")
 assert import_path == "/target"
-machine.log("test done")
-print("******************************")
-machine.shutdown()
-#
-# machine.shell_interact()
 
-# # scan should create preview for rated file
-# machine.wait_until_succeeds("test -f /target/rated.jpg", 20)
-#
-# # scan should not create preview for unrated file
-# machine.fail("test -f /target/unrated.jpg")
+
+# TEST 2: should remove the library as it got emptied
+machine.succeed("sed -i 's/xmp:Rating=\"4\"/xmp:Rating=\"0\"/' /source/rated.NEF.xmp")
+sleep(1) # give dark-sorter time to remove immich library
+
+libs = machine.wait_until_succeeds("curl --fail --silent http://localhost:2283/api/libraries -H x-api-key:magic_api_key_for_dark_sorter_testing", timeout=20)
+libs = json.loads(libs)
+assert not libs
+
+
+# TEST 3: add a library pointing to a subfolder
+machine.succeed("mkdir /target/subdir")
+machine.succeed("chgrp photos /target/subdir")
+machine.succeed("sudo cp -p /rated2.NEF /source/subdir")
+machine.succeed("sudo cp -p /rated2.NEF.xmp /source/subdir")
+
+machine.wait_until_succeeds("test -f /target/subdir/rated2.jpg", timeout=60)
+libs = machine.wait_until_succeeds("curl --fail --silent http://localhost:2283/api/libraries -H x-api-key:magic_api_key_for_dark_sorter_testing", timeout=20)
+libs = json.loads(libs)
+
+import_path = libs[0]["importPaths"][0]
+assert import_path == "/target/subdir"
 '';
 }
