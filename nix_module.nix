@@ -49,7 +49,8 @@ in
           type = types.nullOr types.str;
           default = null;
         };
-        api-key-path = mkOption {
+		# TODO use the _secret for file thing that the immich module itself has
+        api-key-path = mkOption { 
           type = types.nullOr types.path;
           default = null;
         };

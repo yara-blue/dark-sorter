@@ -30,7 +30,8 @@ pub async fn scan_clean_and_link<Exporter: ImageExporter>(
     let parsed_xmps = ParsedXmps::default();
     scan_clean_and_link_dir::<Exporter>(
         source_dir.into(),
-        target_dir.into(),
+        target_dir.clone().into(),
+        target_dir,
         fs,
         previously_exported,
         parsed_xmps,
@@ -43,6 +44,7 @@ pub async fn scan_clean_and_link<Exporter: ImageExporter>(
 async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
     source_dir: SourceDir,
     target_dir: TargetDir,
+    base_target_dir: BaseTargetDir,
     fs: ThrottledFs,
     previously_exported: database::Db,
     parsed_xmps: ParsedXmps,
@@ -110,6 +112,7 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
             recurse_into_subdir::<Exporter>(
                 dir,
                 &target_dir,
+                &base_target_dir,
                 &source_dir,
                 &fs,
                 &previously_exported,
@@ -137,10 +140,12 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
         .await?;
 
     if previews.len() as isize + change_in_previews == 0 {
-        match tokio::fs::remove_dir(&target_dir).await {
-            Ok(()) => {}
-            Err(e) if e.kind() == ErrorKind::DirectoryNotEmpty => (),
-            Err(e) => Err(e)?,
+        if target_dir != base_target_dir.0 {
+            match tokio::fs::remove_dir(&target_dir).await {
+                Ok(()) => {}
+                Err(e) if e.kind() == ErrorKind::DirectoryNotEmpty => (),
+                Err(e) => Err(e)?,
+            }
         }
         if let Some(immich) = immich {
             immich.set_dir_empty(target_dir);
@@ -156,6 +161,7 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
 fn recurse_into_subdir<Exporter: ImageExporter>(
     dir: &DirName,
     target: &TargetDir,
+    base_target_dir: &BaseTargetDir,
     source: &SourceDir,
     fs: &ThrottledFs,
     previously_exported: &database::Db,
@@ -164,6 +170,7 @@ fn recurse_into_subdir<Exporter: ImageExporter>(
 ) -> JoinHandle<color_eyre::Result<()>> {
     let source = source.subdir(dir);
     let target = target.subdir(dir);
+    let base_target_dir = base_target_dir.clone();
     let previously_exported = previously_exported.clone();
     let fs = fs.clone();
     let parsed_xmps = parsed_xmps.clone();
@@ -171,6 +178,7 @@ fn recurse_into_subdir<Exporter: ImageExporter>(
     tokio::spawn(scan_clean_and_link_dir::<Exporter>(
         source,
         target,
+        base_target_dir,
         fs,
         previously_exported,
         parsed_xmps,

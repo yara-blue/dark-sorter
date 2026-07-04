@@ -180,12 +180,7 @@ pub async fn handle_event<Exporter: ImageExporter>(
         // the rating.
         EventKind::FileModificationComplete | EventKind::FileMovedTo => {
             crate::scan::preview::create_update_or_clean_one::<Exporter>(
-                xmp,
-                &xmp_file,
-                &source,
-                &target,
-                fs,
-                db,
+                xmp, &xmp_file, &source, &target, fs, db,
             )
             .await?
         }
@@ -197,17 +192,18 @@ pub async fn handle_event<Exporter: ImageExporter>(
                 im.set_dir_not_empty(preview.parent_dir())
             }
         }
-        Change::Removed if no_previews_in(&preview.parent_dir()).await? => {
+        Change::Removed if no_previews_in(&target).await? => {
             if target != base_target.0 {
-                tokio::fs::remove_dir(&preview.parent_dir())
+                debug!("removing dir: {}", target.display());
+                tokio::fs::remove_dir(&target)
                     .await
                     .ignore_err_if(|e| e.kind() == ErrorKind::DirectoryNotEmpty, ())
                     .wrap_err("Could not remove empty dir")
-                    .note_path(&preview.parent_dir())?;
+                    .note_path(&target)?;
             }
 
             if let Some(im) = immich {
-                im.set_dir_empty(preview.parent_dir());
+                im.set_dir_empty(target);
             }
         }
         Change::None | Change::Removed => (),

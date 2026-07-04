@@ -11,7 +11,6 @@ async fn rated_files_get_previews() {
     let (_t_guard, target) = test_support::TargetDirBuilder::default()
         .with_preview([TestFile::A])
         .build();
-    dbg!(&source, &target);
 
     let mut _s_guard = _s_guard;
     _s_guard.disable_cleanup(true);
@@ -45,7 +44,6 @@ async fn missing_jpeg_gets_created() {
         .with_rated([TestFile::A])
         .build();
     let (_t_guard, target) = test_support::TargetDirBuilder::default().build();
-    // dbg!(&source, &target);
 
     let mut _s_guard = _s_guard;
     _s_guard.disable_cleanup(true);

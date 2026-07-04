@@ -219,11 +219,11 @@ impl Immich {
         };
         retry(delete_library)
             .await
-            .wrap_err("Could not create library")
+            .wrap_err("Could not delete library")
     }
 
     #[instrument(skip_all, fields(method=%method, url))]
-    async fn http_request<T: DeserializeOwned>(
+    async fn http_request<T: IsUnitOrDeserialize>(
         &self,
         method: Method,
         url: &str,
@@ -232,7 +232,7 @@ impl Immich {
     }
 
     #[instrument(skip_all, fields(method=%method, url))]
-    async fn http_request_with_body<B: Serialize, T: DeserializeOwned>(
+    async fn http_request_with_body<B: Serialize, T: IsUnitOrDeserialize>(
         &self,
         method: Method,
         url: &str,
@@ -242,12 +242,12 @@ impl Immich {
     }
 
     #[instrument(skip_all, fields(method=%method, url))]
-    async fn http_request_inner<B: Serialize, T: DeserializeOwned>(
+    async fn http_request_inner<B: Serialize, RB: IsUnitOrDeserialize>(
         &self,
         method: Method,
         url: &str,
         body: Option<&B>,
-    ) -> Result<T, ApiError> {
+    ) -> Result<RB, ApiError> {
         let url = self
             .api_url
             .join(url)
@@ -265,10 +265,31 @@ impl Immich {
         let response = request.send().await.map_err(ApiError::FailedToSend)?;
 
         if response.status().is_success() {
-            response.json::<T>().await.map_err(ApiError::InvalidJson)
+            if let Some(body) = RB::is_unit() {
+                Ok(body)
+            } else {
+                let response = response.text().await.map_err(ApiError::FailedToReceive)?;
+                serde_json::from_str(&response)
+                    .map_err(|error| ApiError::InvalidJson { error, response })
+            }
         } else {
             Err(ApiError::BadStatus(response.status()))
         }
+    }
+}
+
+trait IsUnitOrDeserialize: DeserializeOwned {
+    fn is_unit() -> Option<Self> {
+        None
+    }
+}
+
+impl IsUnitOrDeserialize for Vec<Library> {}
+impl IsUnitOrDeserialize for Library {}
+impl IsUnitOrDeserialize for User {}
+impl IsUnitOrDeserialize for () {
+    fn is_unit() -> Option<Self> {
+        Some(())
     }
 }
 
@@ -278,8 +299,14 @@ pub enum ApiError {
     FailedToSend(#[source] reqwest::Error),
     #[error("Bad status code: {0}")]
     BadStatus(StatusCode),
-    #[error("Could not decode response body as json")]
-    InvalidJson(#[source] reqwest::Error),
+    #[error("Could not decode response body as json, response text is: {response}")]
+    InvalidJson {
+        #[source]
+        error: serde_json::Error,
+        response: String,
+    },
+    #[error("Could not receive response")]
+    FailedToReceive(#[source] reqwest::Error),
 }
 
 trait CanBeRecoverable {
@@ -292,6 +319,7 @@ impl CanBeRecoverable for ApiError {
     fn is_recoverable(&self) -> bool {
         match self {
             ApiError::FailedToSend(_) => true,
+            ApiError::FailedToReceive(_) => true,
             ApiError::BadStatus(
                 // can always add more
                 StatusCode::BAD_REQUEST
@@ -302,7 +330,7 @@ impl CanBeRecoverable for ApiError {
                 | StatusCode::NOT_IMPLEMENTED,
             ) => false,
             ApiError::BadStatus(_) => true,
-            ApiError::InvalidJson(_) => false,
+            ApiError::InvalidJson { .. } => false,
         }
     }
 }

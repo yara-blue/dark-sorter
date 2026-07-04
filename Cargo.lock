@@ -379,6 +379,7 @@ dependencies = [
  "reqwest",
  "rlimit",
  "serde",
+ "serde_json",
  "spin 0.12.1",
  "sysctl",
  "systemstat",

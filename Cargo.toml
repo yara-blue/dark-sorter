@@ -38,6 +38,7 @@ tracing-error = "0.2.1"
 reqwest = { version = "0.13.4", features = ["json"] }
 futures-concurrency = "7.7.1"
 tokio-retry = "0.3.2"
+serde_json = "1.0.150"
 
 [[test]]
 name = "watch"

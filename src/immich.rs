@@ -48,6 +48,7 @@ impl ImmichSync {
         warn!("Immich sync overflown, dropped some events. Will rescan when it catches up")
     }
 
+    #[instrument(skip(self))]
     pub fn set_dir_empty(&self, dir: TargetDir) {
         debug!("ImmichSync: marking dir as empty");
         match self.tx.try_send(Event::EmptyDir(dir)) {
@@ -57,6 +58,7 @@ impl ImmichSync {
         }
     }
 
+    #[instrument(skip(self))]
     pub fn set_dir_not_empty(&self, dir: TargetDir) {
         debug!("ImmichSync: marking dir as not empty");
         match self.tx.try_send(Event::NonEmptyDir(dir)) {
@@ -96,7 +98,7 @@ impl ImmichSync {
         match thread.join() {
             Ok(Ok(ImmichHandleDropped)) => unreachable!("this only happens after the rx drops"),
             Ok(Err(report)) => {
-                tracing::error!("Immich sync ran into unrecoverable error: {report}")
+                tracing::error!("Immich sync ran into unrecoverable error: {report:?}")
             }
             Err(panic) => panic::resume_unwind(panic),
         }
@@ -188,10 +190,14 @@ async fn maintain_immich_sync(
                     lib
                 } else {
                     let new = add_managed_library(path.clone(), &base_dir, &mut immich).await?;
+                    debug!("added new library: {new:?}");
                     libs.insert(new.import_path.clone(), new);
                     libs.get_mut(&path).expect("just inserted")
                 };
-                if lib.last_scanned.is_none_or(|t| t.elapsed().as_secs() > 30) {
+
+                if let Some(t) = lib.last_scanned
+                    && t.elapsed().as_secs() > 30
+                {
                     lib.last_scanned = Some(Instant::now());
                     immich.update_library(&lib.id).await?;
                 } else {
@@ -230,6 +236,7 @@ async fn add_managed_library(
     })
 }
 
+#[derive(Debug)]
 struct ManagedLibrary {
     // Library ID
     id: LibraryId,

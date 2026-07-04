@@ -46,6 +46,7 @@ pkgs.testers.runNixOSTest {
         };
         machine-learning.enable = false;
         package = pkgs.immich.overrideAttrs (old: {
+          #TODO use this instead https://github.com/isabelroses/nixpkgs/blob/95d5f3106884fe743b38613b0d75b098a75c1266/nixos/tests/web-apps/immich.nix#L49
           patches = (old.patches or [ ]) ++ [
             ./add_hardcoded_admin_and_api_key.patch
           ];
@@ -148,10 +149,10 @@ pkgs.testers.runNixOSTest {
 
     # TEST 3: add a library pointing to a subfolder
     print("TEST 3 ##########################################################")
-    machine.succeed("mkdir /target/subdir")
-    machine.succeed("chgrp photos /target/subdir")
-    machine.succeed("sudo cp -p /rated2.NEF /source/subdir")
-    machine.succeed("sudo cp -p /rated2.NEF.xmp /source/subdir")
+    machine.succeed("mkdir /source/subdir")
+    machine.succeed("chgrp photos /source/subdir")
+    machine.succeed("sudo cp -p /rated2.NEF /source/subdir/")
+    machine.succeed("sudo cp -p /rated2.NEF.xmp /source/subdir/")
 
     machine.wait_until_succeeds("test -f /target/subdir/rated2.jpg", timeout=60)
     libs = get_one_or_more_libs_from_immich()
