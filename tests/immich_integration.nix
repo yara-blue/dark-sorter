@@ -37,13 +37,13 @@ pkgs.testers.runNixOSTest {
       services.immich = {
         enable = true;
         group = "photos";
-		settings = {
-			library.scan.enabled = false;
-			library.watch.enabled = false;
-			machineLearning.enabled = false;
-			# logging.enabled = false;
-			# logging.level = "Warn";
-		};
+        settings = {
+          library.scan.enabled = false;
+          library.watch.enabled = false;
+          machineLearning.enabled = false;
+          # logging.enabled = false;
+          # logging.level = "Warn";
+        };
         machine-learning.enable = false;
         package = pkgs.immich.overrideAttrs (old: {
           patches = (old.patches or [ ]) ++ [
@@ -71,65 +71,92 @@ pkgs.testers.runNixOSTest {
   # Methods available on machine objects:
   # https://nixos.org/manual/nixos/stable/index.html#ssec-machine-objects
   testScript = ''
-from typing import Any
-import retrying
-import json
+    from typing import Any
+    import json
 
-def external_libs_list() -> list[dict[str, Any]]:
-	libs = machine.succeed("curl --fail --silent http://localhost:2283/api/libraries -H x-api-key:magic_api_key_for_dark_sorter_testing", timeout=20)
-	libs = json.loads(libs)
-	return libs
+    def wait_until_immich_ready():
+        machine.wait_for_open_port(2283) # immich is ready
+        machine.wait_until_succeeds("curl --fail --silent http://localhost:2283/api/libraries -H x-api-key:magic_api_key_for_dark_sorter_testing", timeout=20)
 
-@retrying.retry(stop_max_attempt_number=500, wait_fixed=100)
-def get_empty_external_libs_list() -> list[dict[str, Any]]:
-	print("attempting to get empty list from immich...")
-	libs = external_libs_list()
-	if len(libs) > 0:
-		raise Exception("Immich reports one or more external libs")
-	else:
-		return libs 
+    def get_one_or_more_libs_from_immich() -> list[dict[str, Any]]:
+        cmd = r"""
+            while true; do
+                libs="$(curl --fail --silent \
+                    http://localhost:2283/api/libraries \
+                    -H x-api-key:magic_api_key_for_dark_sorter_testing)" 
 
-@retrying.retry(stop_max_attempt_number=500, wait_fixed=100)
-def get_non_empty_external_libs_list() -> list[dict[str, Any]]:
-	print("attempting to get non empty list from immich...")
-	libs = external_libs_list()
-	if len(libs) == 0:
-		raise Exception("Immich reports no external libs")
-	else:
-		return libs
+                if [ $? -ne 0 ]; then
+                    sleep 0.1
+                    continue
+                fi
 
-def wait_until_immich_ready():
-	machine.wait_for_open_port(2283) # immich is ready
-	machine.wait_until_succeeds("curl --fail --silent http://localhost:2283/api/libraries -H x-api-key:magic_api_key_for_dark_sorter_testing", timeout=20)
+                if [ "$libs" == "[]" ]; then
+                    sleep 0.1
+                    continue
+                fi
+
+                echo "$libs"
+                break
+            done
+        """
+
+        libs = machine.succeed(cmd, timeout=20)
+        libs = json.loads(libs)
+        return libs
+
+    def get_zero_libs_from_immich():
+        cmd = r"""
+            while true; do
+                libs="$(curl --fail --silent \
+                    http://localhost:2283/api/libraries \
+                    -H x-api-key:magic_api_key_for_dark_sorter_testing)" 
+
+                if [ $? -ne 0 ]; then
+                    sleep 0.1
+                    continue
+                fi
+
+                if [ "$libs" != "[]" ]; then
+                    sleep 0.1
+                    continue
+                fi
+
+                break
+            done
+        """
+
+        machine.succeed(cmd, timeout=20)
+        return
+
+    print("SETUP 1 #########################################################")
+    wait_until_immich_ready()
+    machine.wait_until_succeeds("test -f /target/rated.jpg", timeout=60)
 
 
-
-# SETUP
-wait_until_immich_ready()
-machine.wait_until_succeeds("test -f /target/rated.jpg", timeout=60)
-
-
-# TEST 1: should create an immich library
-libs = get_non_empty_external_libs_list()
-import_path = libs[0]["importPaths"][0]
-assert import_path == "/target"
+    # TEST 1: should create an immich library
+    print("TEST 1 ##########################################################")
+    libs = get_one_or_more_libs_from_immich()
+    import_path = libs[0]["importPaths"][0]
+    assert import_path == "/target"
 
 
-# TEST 2: should remove the library as it got emptied
-machine.succeed("sed -i 's/xmp:Rating=\"4\"/xmp:Rating=\"0\"/' /source/rated.NEF.xmp")
-get_empty_external_libs_list()
+    # TEST 2: should remove the library as it got emptied
+    print("TEST 2 ##########################################################")
+    machine.succeed("sed -i 's/xmp:Rating=\"4\"/xmp:Rating=\"0\"/' /source/rated.NEF.xmp")
+    get_zero_libs_from_immich()
 
 
-# TEST 3: add a library pointing to a subfolder
-machine.succeed("mkdir /target/subdir")
-machine.succeed("chgrp photos /target/subdir")
-machine.succeed("sudo cp -p /rated2.NEF /source/subdir")
-machine.succeed("sudo cp -p /rated2.NEF.xmp /source/subdir")
+    # TEST 3: add a library pointing to a subfolder
+    print("TEST 3 ##########################################################")
+    machine.succeed("mkdir /target/subdir")
+    machine.succeed("chgrp photos /target/subdir")
+    machine.succeed("sudo cp -p /rated2.NEF /source/subdir")
+    machine.succeed("sudo cp -p /rated2.NEF.xmp /source/subdir")
 
-machine.wait_until_succeeds("test -f /target/subdir/rated2.jpg", timeout=60)
-libs = get_non_empty_external_libs_list()
-import_path = libs[0]["importPaths"][0]
-print(f"************************************ pathhhhhh issss {import_path}")
-assert import_path == "/target/subdir"
-'';
+    machine.wait_until_succeeds("test -f /target/subdir/rated2.jpg", timeout=60)
+    libs = get_one_or_more_libs_from_immich()
+    import_path = libs[0]["importPaths"][0]
+    print(f"************************************ pathhhhhh issss {import_path}")
+    assert import_path == "/target/subdir"
+  '';
 }

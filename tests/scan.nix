@@ -15,6 +15,7 @@ pkgs.testers.runNixOSTest {
     in
     {
       imports = [ nixosModule.default ];
+      virtualisation.graphics = false;
       services.dark-sorter = {
         enable = true;
         source-dir = "/source";
