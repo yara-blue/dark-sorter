@@ -2,6 +2,7 @@
   config,
   lib,
   pkgs,
+  inputs,
   ...
 }:
 
@@ -25,7 +26,10 @@ in
         default = "dark-sorter";
         description = "The user dark-sorter creates files as";
       };
-      package = lib.mkPackageOption pkgs "dark-sorter" { };
+      package = lib.mkOption {
+		type = types.package;
+	    default = inputs.dark-sorter.packages.x86_64-linux.default;
+	  };
       photo-group = mkOption {
         type = types.str;
         description = ''

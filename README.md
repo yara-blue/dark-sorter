@@ -51,9 +51,9 @@ services.dark-sorter = {
     enable = true;
     source-dir = /srv/photos/raws;
     target-dir = /srv/photos/jpgs;
-    user = dark-sorter; # this is also the default
+    user = "dark-sorter"; # this is also the default
     # has read access to raws and read+write to jpgs
-    photo-group = photos; 
+    photo-group = "photos"; 
     # optional
     immich = {
         url-path = <>;
