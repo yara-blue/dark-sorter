@@ -7,7 +7,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use crate::fs::XmpFile;
-use crate::watcher::EyreWithPath;
+use crate::watcher::{EyreWithPath, ResultExt};
 use crate::xmp;
 use color_eyre::Section;
 use color_eyre::eyre::{Context, ContextCompat, OptionExt};
@@ -121,6 +121,7 @@ fn setup_db_file_path() -> color_eyre::Result<PathBuf> {
     .join(env!("CARGO_PKG_NAME"));
 
     std::fs::create_dir(&dir)
+        .ignore_err_if(|e| e.kind() == ErrorKind::AlreadyExists, ())
         .wrap_err("Could not setup dir for database")
         .with_note(|| format!("database dir: {}", dir.display()))?;
 
