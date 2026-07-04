@@ -107,24 +107,28 @@ impl Xmp {
         let edits = parse_edits(&s);
         let raw = parse_raw(&s)?;
 
-        let xmp_file_name = path.file_stem().to_str().ok_or(XmpError::FileNameNotUtf8)?;
+        let derived_from_path = path
+            .file_stem()
+            .to_str()
+            .ok_or(XmpError::FileNameNotUtf8)?
+            .to_string();
 
-        if *raw != *xmp_file_name {
+        if *raw != *derived_from_path {
             return Err(XmpError::RawNameMismatches {
-                raw: Arc::clone(&raw),
-                xmp_file_name: xmp_file_name.to_string(),
+                listed_in_file: Arc::clone(&raw),
+                derived_from_path,
             });
         }
 
         Ok(Self { rating, edits, raw })
     }
 
-    pub fn preview_file(&self, target: impl AsRef<TargetDir>) -> PreviewFile {
-        PreviewFile(target.as_ref().0.0.join(&*self.raw).with_extension("jpg"))
+    pub fn preview_file(&self, target: &TargetDir) -> PreviewFile {
+        PreviewFile(target.0.0.join(&*self.raw).with_extension("jpg"))
     }
 
-    pub(crate) fn raw_file(&self, source: impl AsRef<SourceDir>) -> RawFile {
-        RawFile(source.as_ref().0.0.join(&*self.raw))
+    pub(crate) fn raw_file(&self, source: &SourceDir) -> RawFile {
+        RawFile(source.0.0.join(&*self.raw))
     }
 
     pub async fn preview_missing(&self, target: impl AsRef<TargetDir>) -> color_eyre::Result<bool> {
@@ -168,12 +172,12 @@ pub enum XmpError {
     #[error(
         "The raw file listed in the xmp must have the same name \
         as the xmp file without it's extension. \
-        raw file listed: {raw}, \
-        xmp file name without extension: {xmp_file_name}"
+        raw file listed: {listed_in_file}, \
+        raw file derived from path: {derived_from_path}"
     )]
     RawNameMismatches {
-        raw: Arc<str>,
-        xmp_file_name: String,
+        listed_in_file: Arc<str>,
+        derived_from_path: String,
     },
 }
 
@@ -212,18 +216,30 @@ pub(crate) fn parse_edits(s: &str) -> Option<EditHash> {
     Some(EditHash(hasher.finish()))
 }
 
-#[derive(Debug, Clone)]
+#[repr(i8)]
+#[derive(Debug, Clone, Copy)]
 pub enum Rating {
-    Rejected,
-    Unrated,
-    One,
-    Two,
-    Three,
-    Four,
-    Five,
+    Rejected = -1,
+    Unrated = 0,
+    One = 1,
+    Two = 2,
+    Three = 3,
+    Four = 4,
+    Five = 5,
 }
 
 impl Rating {
+    pub fn is_rated(&self) -> bool {
+        match self {
+            Rating::Rejected | Rating::Unrated => false,
+            Rating::One | Rating::Two | Rating::Three | Rating::Four | Rating::Five => true,
+        }
+    }
+
+    pub fn number(&self) -> i8 {
+        *self as i8
+    }
+
     fn from_str(s: &str) -> Result<Self, XmpError> {
         let start_pattern = "xmp:Rating=\"";
         let rating_start =

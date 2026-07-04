@@ -24,6 +24,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::time;
 use tracing::debug;
 use tracing::instrument;
+use tracing::warn;
 
 mod client;
 
@@ -42,17 +43,24 @@ pub struct ImmichSync {
 }
 
 impl ImmichSync {
+    fn mark_overflow(&self) {
+        self.overflown.store(true, Ordering::Relaxed);
+        warn!("Immich sync overflown, dropped some events. Will rescan when it catches up")
+    }
+
     pub fn set_dir_empty(&self, dir: TargetDir) {
+        debug!("ImmichSync: marking dir as empty");
         match self.tx.try_send(Event::EmptyDir(dir)) {
-            Err(TrySendError::Full(_)) => self.overflown.store(true, Ordering::Relaxed),
+            Err(TrySendError::Full(_)) => self.mark_overflow(),
             Err(TrySendError::Closed(_)) => self.report_error_or_continue_panic(),
             Ok(_) => (),
         }
     }
 
     pub fn set_dir_not_empty(&self, dir: TargetDir) {
+        debug!("ImmichSync: marking dir as not empty");
         match self.tx.try_send(Event::NonEmptyDir(dir)) {
-            Err(TrySendError::Full(_)) => self.overflown.store(true, Ordering::Relaxed),
+            Err(TrySendError::Full(_)) => self.mark_overflow(),
             Err(TrySendError::Closed(_)) => self.report_error_or_continue_panic(),
             Ok(_) => (),
         }

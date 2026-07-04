@@ -121,7 +121,7 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
         .map(|join_result| join_result.wrap_err("A panic occurred").flatten())
         .try_for_each(|()| future::ready(Ok(())));
 
-    let (_, n_preview_links_created, _) = (
+    let (_, change_in_previews, _) = (
         preview::remove_stale(&source_dir, previews.iter(), &parsed_xmps, &fs),
         preview::create_update_or_clean::<Exporter>(
             &xmp_files,
@@ -136,15 +136,14 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
         .try_join()
         .await?;
 
-    if previews.len() + n_preview_links_created == 0 {
+    if previews.len() as isize + change_in_previews == 0 {
         match tokio::fs::remove_dir(&target_dir).await {
-            Ok(()) => {
-                if let Some(immich) = immich {
-                    immich.set_dir_empty(target_dir);
-                }
-            }
+            Ok(()) => {}
             Err(e) if e.kind() == ErrorKind::DirectoryNotEmpty => (),
             Err(e) => Err(e)?,
+        }
+        if let Some(immich) = immich {
+            immich.set_dir_empty(target_dir);
         }
     } else if let Some(immich) = immich {
         immich.set_dir_not_empty(target_dir);

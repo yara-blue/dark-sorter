@@ -40,9 +40,9 @@ futures-concurrency = "7.7.1"
 tokio-retry = "0.3.2"
 
 [[test]]
-name = "watching_symlinks_new_rated"
+name = "watch"
 # required-features = ["test_support"]
 
 [[test]]
-name = "scan_symlinks_rated"
+name = "scan"
 # required-features = ["test_support"]

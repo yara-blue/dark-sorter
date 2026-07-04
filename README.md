@@ -7,8 +7,11 @@ Optionally integrates Immich creating external libraries for each folder in the
 mirror directory structure and triggering selective rescans when needed.
 
 # Usage
-Note that this needs to run as root when using `--deamon` for more options see
+Note that this needs to run as root when using `--daemon` for more options see
 `--help` or the options in the NixOS module.
+
+When using the daemon it is recommended to have the photos on their own file
+system. This makes file watching more efficient.
 
 # Install
 ## NixOS flakes

@@ -6,8 +6,7 @@ use color_eyre::eyre::{Context, OptionExt};
 use dark_sorter::immich::ImmichSync;
 use dark_sorter::watcher::EyreWithPath;
 use dark_sorter::{
-    BaseSourceDir, BaseTargetDir, DarktableCli, Db, ThrottledFs, immich, running_as_root,
-    scan_clean_and_link, watcher,
+    BaseSourceDir, BaseTargetDir, DarktableCli, Db, ThrottledFs, immich, running_as_root, watcher,
 };
 use reqwest::Url;
 use tracing::{info, warn};
@@ -100,9 +99,9 @@ async fn main() -> color_eyre::Result<()> {
     let fs = ThrottledFs::new(user, group)?;
     let db = Db::load_from_default_dir_or_create().await?;
 
-    let event_rx = cli
+    let watcher = cli
         .daemon
-        .then_some(watcher::start(cli.source_dir.clone())?);
+        .then_some(watcher::FanotifyWatcher::start(cli.source_dir.clone())?);
 
     let url = cli
         .immich_url_path
@@ -139,46 +138,13 @@ async fn main() -> color_eyre::Result<()> {
         None
     };
 
-    let mut first_scan = true;
-    loop {
-        scan_clean_and_link::<DarktableCli>(
-            cli.source_dir.clone(),
-            cli.target_dir.clone(),
-            fs.clone(),
-            db.clone(),
-            immich_sync.clone(),
-        )
-        .await?;
-
-        let Some(ref event_rx) = event_rx else {
-            break Ok(());
-        };
-        if first_scan {
-            info!("Initially scan complete");
-            first_scan = false;
-        }
-
-        for event in event_rx {
-            if event.overflow {
-                warn!("Filesystem watcher overloaded, re-scanning");
-                let _ = event_rx.try_iter().count();
-                break;
-            }
-            if let Some(ref immich_sync) = immich_sync
-                && immich_sync.needs_rescan()
-            {
-                warn!("Immich sync overflowed and has recovered, re-scanning");
-                break;
-            }
-            watcher::handle_kitty_fs_change::<DarktableCli>(
-                event,
-                &cli.source_dir,
-                &cli.target_dir,
-                &fs,
-                &db,
-                immich_sync.as_ref(),
-            )
-            .await?;
-        }
-    }
+    dark_sorter::main_loop::<DarktableCli>(
+        cli.source_dir,
+        cli.target_dir,
+        fs,
+        db,
+        immich_sync,
+        watcher,
+    )
+    .await
 }

@@ -1,20 +1,27 @@
-use color_eyre::Section;
-use color_eyre::eyre::{Context, eyre};
+use color_eyre::eyre::Context;
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::fs;
-use std::io::ErrorKind;
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard, Once};
+use std::sync::{Arc, Once};
 use tempfile::TempDir;
+use tokio::sync::{Notify, mpsc};
+use tracing::info;
 
-use crate::fs::{Dir, PreviewFile, RawFile, SourceDir, TargetDir, XmpFile};
+use crate::fs::{Dir, DirName, PreviewFile, RawFile, SourceDir, TargetDir, XmpFile};
 use crate::watcher::EyreWithPath;
-use crate::{BaseSourceDir, BaseTargetDir, ImageExporter};
+use crate::xmp::Rating;
+use crate::{BaseSourceDir, BaseTargetDir, ImageExporter, Watcher};
+
+pub use crate::watcher;
 
 /// an initially rated picture
-const SUBDIR: &str = "some_event/some_day";
-const RATED_PREVIEW_JPEG_CONTENT: &str = "this is totally a preview jpg of a rated photo /s.";
+pub fn test_subdir() -> DirName {
+    DirName(OsStr::new("some_event/some_day").to_owned())
+}
+const PREVIEW_JPEG_CONTENT: &str = "this is totally a preview jpg of a rated raw /s.";
 const RATED_RAW_CONTENT: &str = "this is a raw photo that is rated, I swear! /s.";
+const UNRATED_RAW_CONTENT: &str = "this is a raw photo that is not rated, I swear! /s.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TestFile {
@@ -27,26 +34,19 @@ impl TestFile {
             TestFile::A => "a",
         }
     }
-    fn xmp_file(self, source: &SourceDir) -> XmpFile {
+    pub fn xmp_file(self, source: impl AsRef<SourceDir>) -> XmpFile {
         XmpFile(
             source
+                .as_ref()
                 .0
                 .0
-                .join(SUBDIR)
                 .join(self.name())
                 .with_added_extension("NEF")
                 .with_added_extension("xmp"),
         )
     }
-    fn jpg_link(self, target: &TargetDir) -> PreviewFile {
-        PreviewFile(
-            target
-                .0
-                .0
-                .join(SUBDIR)
-                .join(self.name())
-                .with_added_extension("jpg"),
-        )
+    fn jpg_preview(self, target: &TargetDir) -> PreviewFile {
+        PreviewFile(target.0.0.join(self.name()).with_added_extension("jpg"))
     }
 }
 
@@ -60,18 +60,12 @@ impl AsRef<Path> for TestFile {
 pub struct SourceDirBuilder {
     rated: HashSet<TestFile>,
     unrated: HashSet<TestFile>,
-    preview: HashSet<TestFile>,
 }
 
 impl SourceDirBuilder {
     #[must_use]
     pub fn with_rated(mut self, files: impl IntoIterator<Item = TestFile>) -> Self {
         self.rated.extend(files);
-        self
-    }
-    #[must_use]
-    pub fn with_preview(mut self, files: impl IntoIterator<Item = TestFile>) -> Self {
-        self.preview.extend(files);
         self
     }
     #[must_use]
@@ -84,91 +78,110 @@ impl SourceDirBuilder {
         assert_eq!(self.unrated.intersection(&self.rated).count(), 0);
 
         let dir = tempfile::tempdir().unwrap();
-        let subdir = dir.path().join(SUBDIR);
-        let source = BaseSourceDir(SourceDir(Dir(dir.path().to_path_buf())));
-        fs::create_dir_all(&subdir).unwrap();
+        let base_source = BaseSourceDir(SourceDir(Dir(dir.path().to_path_buf())));
+        let source = base_source.subdir(&test_subdir());
+
+        fs::create_dir_all(&source).unwrap();
 
         for test_file in self.unrated.union(&self.rated) {
-            fs::write(
-                subdir.join(test_file).with_extension("NEF"), // needs to match xmp file content
-                RATED_RAW_CONTENT,
-            )
-            .unwrap();
+            add_file(*test_file, Rating::Unrated, &source);
         }
         for test_file in self.rated.union(&self.unrated) {
-            fs::write(
-                subdir
-                    .join(test_file)
-                    .with_extension("NEF")
-                    .with_added_extension("xmp"),
-                include_str!("test_support/rated_picture.xmp")
-                    .replace("<FILE_NAME>", test_file.name()),
-            )
-            .unwrap();
-        }
-        for test_file in self.unrated {
-            remove_rating(&source, test_file);
-        }
-        for test_file in self.preview {
-            fs::write(
-                subdir.join(test_file).with_extension("jpg"),
-                RATED_PREVIEW_JPEG_CONTENT,
-            )
-            .unwrap();
+            add_file(*test_file, Rating::Four, &source);
         }
 
-        (dir, source)
+        (dir, base_source)
     }
 }
 
-#[must_use]
-pub fn empty_dir() -> (TempDir, BaseTargetDir) {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().to_path_buf();
-    (dir, BaseTargetDir(TargetDir(Dir(path))))
+#[derive(Debug, Clone, Default)]
+pub struct TargetDirBuilder {
+    preview: HashSet<TestFile>,
 }
 
-pub fn assert_preview_in_place(target: impl AsRef<TargetDir>, test_file: TestFile) {
-    let file = test_file.jpg_link(target.as_ref());
-    let rated_meta = fs::symlink_metadata(&file).expect("There should be a preview");
-    assert!(rated_meta.file_type().is_file());
-    assert!(fs::read_to_string(file).unwrap() == RATED_PREVIEW_JPEG_CONTENT);
+impl TargetDirBuilder {
+    #[must_use]
+    pub fn with_preview(mut self, files: impl IntoIterator<Item = TestFile>) -> Self {
+        self.preview.extend(files);
+        self
+    }
+
+    #[must_use]
+    pub fn build(self) -> (TempDir, BaseTargetDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let base_target = BaseTargetDir(TargetDir(Dir(dir.path().to_path_buf())));
+        let target = base_target.subdir(&test_subdir());
+
+        fs::create_dir_all(&target).unwrap();
+
+        for test_file in self.preview {
+            fs::write(test_file.jpg_preview(&target), PREVIEW_JPEG_CONTENT).unwrap();
+        }
+
+        (dir, base_target)
+    }
 }
 
-pub fn assert_not_symlinked(target: impl AsRef<TargetDir>, test_file: TestFile) {
-    let file = test_file.jpg_link(target.as_ref());
-    let res = fs::metadata(&file).unwrap_err();
-    assert_eq!(res.kind(), ErrorKind::NotFound);
+#[track_caller]
+pub fn assert_preview_in_place(target: &BaseTargetDir, test_file: TestFile) {
+    let target = target.subdir(&test_subdir());
+    let file = test_file.jpg_preview(target.as_ref());
+    assert!(&file.0.is_file());
+    let content = fs::read_to_string(file).unwrap();
+    assert_eq!(content, PREVIEW_JPEG_CONTENT);
 }
 
-pub fn remove_rating(source: impl AsRef<SourceDir>, test_file: TestFile) {
-    fs::write(
-        test_file.xmp_file(source.as_ref()),
-        include_str!("test_support/rated_picture.xmp")
-            .replace("xmp:Rating=\"3\"", "xmp:Rating=\"0\""),
+#[track_caller]
+pub fn assert_preview_missing(target: &BaseTargetDir, test_file: TestFile) {
+    let target = target.subdir(&test_subdir());
+    let file = test_file.jpg_preview(target.as_ref());
+    assert!(!file.0.exists());
+}
+
+pub fn remove_rating(source: &SourceDir, test_file: TestFile) {
+    add_file(test_file, Rating::Unrated, source);
+}
+
+pub fn add_rating(source: &SourceDir, test_file: TestFile) {
+    add_file(test_file, Rating::Four, source);
+}
+
+pub fn add_file(file: TestFile, rating: Rating, source: impl AsRef<SourceDir>) {
+    std::fs::write(
+        // needs to match xmp file content
+        file.xmp_file(&source).raw_file(),
+        if rating.is_rated() {
+            RATED_RAW_CONTENT
+        } else {
+            UNRATED_RAW_CONTENT
+        },
+    )
+    .unwrap();
+    std::fs::write(
+        file.xmp_file(source),
+        include_str!("../tests/assets/small_raw.NEF.xmp")
+            .replace("<FILENAME>", file.name())
+            .replace("<RATING>", &rating.number().to_string()),
     )
     .unwrap();
 }
 
-pub fn add_rating(source: impl Into<SourceDir>, test_file: TestFile) {
-    fs::write(
-        test_file.xmp_file(&source.into()),
-        include_str!("test_support/rated_picture.xmp"),
-    )
-    .unwrap();
+pub fn remove_file(file: TestFile, source: impl AsRef<SourceDir>) {
+    std::fs::remove_file(file.xmp_file(&source)).unwrap();
+    std::fs::remove_file(file.xmp_file(&source).raw_file()).unwrap();
 }
 
 /// Puts a file ending in `.jpg` next to the raw file.
-pub struct FakeJpgExporter;
+pub struct TestExporter;
 
-impl ImageExporter for FakeJpgExporter {
+impl ImageExporter for TestExporter {
     async fn export(
         _: &XmpFile,
         _: &RawFile,
         output_file: &PreviewFile,
         fs: &crate::fs::ThrottledFs,
     ) -> color_eyre::Result<()> {
-        std::fs::write(output_file, RATED_PREVIEW_JPEG_CONTENT)
+        std::fs::write(output_file, PREVIEW_JPEG_CONTENT)
             .wrap_err("Failed to write fake jpeg")
             .note_path(output_file)?;
         std::os::unix::fs::chown(output_file, Some(fs.user), Some(fs.group))
@@ -176,36 +189,92 @@ impl ImageExporter for FakeJpgExporter {
     }
 }
 
-pub fn single_threaded_sudo_test_setup() -> MutexGuard<'static, ()> {
-    static FORCE_SINGLE_THREADED: Mutex<()> = Mutex::new(());
+pub fn test_setup() {
+    use tracing_error::ErrorLayer;
+    use tracing_subscriber::filter::LevelFilter;
+    use tracing_subscriber::fmt;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
 
-    let _ = color_eyre::install();
+    static INIT_ERR_REPORTING: Once = Once::new();
 
-    if caps::has_cap(
-        None,
-        caps::CapSet::Permitted,
-        caps::Capability::CAP_SYS_ADMIN,
-    )
-    .unwrap()
-    {
-        Ok(())
-    } else {
-        Err(eyre!("this test must be run using sudo")).with_suggestion(|| {
-            format!(
-                "try running: `sudo {}`",
-                std::env::current_exe().unwrap().display()
-            )
-        })
-    }
-    .unwrap();
+    INIT_ERR_REPORTING.call_once(|| {
+        color_eyre::install().unwrap();
+        tracing_subscriber::registry()
+            .with(fmt::layer().pretty())
+            .with(LevelFilter::DEBUG)
+            .with(ErrorLayer::default())
+            .init();
+    });
+    info!("Test started");
+}
 
-    match FORCE_SINGLE_THREADED.lock() {
-        Ok(m) => m,
-        Err(e) => e.into_inner(),
+pub struct TestWatcher {
+    in_next: Arc<Notify>,
+    rx: mpsc::Receiver<watcher::Event>,
+}
+
+pub struct TestWatcherHandle {
+    in_next: Arc<Notify>,
+    tx: mpsc::Sender<watcher::Event>,
+}
+
+impl TestWatcher {
+    pub fn new() -> (TestWatcherHandle, Self) {
+        let (tx, rx) = mpsc::channel(5);
+        let in_next = Arc::new(Notify::new());
+        (
+            TestWatcherHandle {
+                in_next: Arc::clone(&in_next),
+                tx,
+            },
+            Self { in_next, rx },
+        )
     }
 }
 
-pub fn test_setup() {
-    static INIT_ERR_REPORTING: Once = Once::new();
-    INIT_ERR_REPORTING.call_once(|| color_eyre::install().unwrap());
+impl TestWatcherHandle {
+    pub async fn wait_till_in_next(&self) {
+        self.in_next.notified().await;
+    }
+    pub fn send_file_modified(&self, test_file: TestFile, source: &SourceDir) {
+        self.tx
+            .try_send(watcher::Event {
+                xmp_file: test_file.xmp_file(source),
+                kind: watcher::EventKind::FileModificationComplete,
+            })
+            .unwrap()
+    }
+
+    pub fn send_file_added(&self, test_file: TestFile, source: &SourceDir) {
+        self.tx
+            .try_send(watcher::Event {
+                xmp_file: test_file.xmp_file(source),
+                // Note: we do not care about the file being created
+                // we want when the file is ready for reading.
+                kind: watcher::EventKind::FileModificationComplete,
+            })
+            .unwrap()
+    }
+    pub fn send_file_removed(&self, test_file: TestFile, source: &SourceDir) {
+        self.tx
+            .try_send(watcher::Event {
+                xmp_file: test_file.xmp_file(source),
+                kind: watcher::EventKind::FileDeleted,
+            })
+            .unwrap()
+    }
+}
+
+impl Watcher for TestWatcher {
+    fn clear(&mut self) {}
+
+    async fn next(&mut self) -> crate::watcher::Event {
+        self.in_next.notify_one();
+        self.rx.recv().await.unwrap()
+    }
+
+    fn overflown(&self) -> bool {
+        false
+    }
 }

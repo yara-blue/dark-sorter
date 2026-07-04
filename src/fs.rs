@@ -89,9 +89,6 @@ macro_rules! dir_wrapper {
             pub fn display(&self) -> std::path::Display<'_> {
                 self.0.display()
             }
-            pub fn subdir(&self, dir: &DirName) -> Self {
-                Self(self.0.subdir(dir))
-            }
         }
         impl AsRef<$wraps> for $name {
             fn as_ref(&self) -> &$wraps {
@@ -120,6 +117,17 @@ dir_wrapper! {SourceDir, Dir}
 
 dir_wrapper! {BaseTargetDir, TargetDir}
 dir_wrapper! {BaseSourceDir, SourceDir}
+
+impl BaseTargetDir {
+    pub fn subdir(&self, dir: &DirName) -> TargetDir {
+        self.0.subdir(dir)
+    }
+}
+impl BaseSourceDir {
+    pub fn subdir(&self, dir: &DirName) -> SourceDir {
+        self.0.subdir(dir)
+    }
+}
 
 impl FromStr for BaseTargetDir {
     type Err = <PathBuf as FromStr>::Err;
@@ -160,6 +168,10 @@ impl From<BaseSourceDir> for SourceDir {
 pub struct NotBaseSubDir;
 
 impl TargetDir {
+    pub fn subdir(&self, dir: &DirName) -> Self {
+        Self(self.0.subdir(dir))
+    }
+
     pub fn try_new(path: impl AsRef<Path>, base: &BaseTargetDir) -> Result<Self, NotBaseSubDir> {
         let path = path.as_ref();
         if path.starts_with(base) {
@@ -173,6 +185,12 @@ impl TargetDir {
             .0
             .strip_prefix(&base.0.0)
             .expect("There is only one base target dir and all target dirs have it as prefix")
+    }
+}
+
+impl SourceDir {
+    pub fn subdir(&self, dir: &DirName) -> Self {
+        Self(self.0.subdir(dir))
     }
 }
 
@@ -292,19 +310,31 @@ impl TryFrom<DirEntry> for XmpFile {
 }
 
 impl XmpFile {
-    pub fn preview_path(&self, source: impl AsRef<SourceDir>) -> PreviewFile {
-        // TODO wtf refactor this
-        let mut xmp_path = self.0.with_extension("");
-        xmp_path.set_extension("");
-        let name = xmp_path.file_name().expect("DirEntry has a file name");
+    pub fn preview_path(&self, source: &BaseSourceDir, target: &BaseTargetDir) -> PreviewFile {
+        let relative = self
+            .0
+            .strip_prefix(source)
+            .expect("XmpFile is always inside source");
+        let in_target = target.0.0.join(relative);
+        let jpg = in_target.with_extension("").with_extension("jpg");
+        PreviewFile(jpg)
+    }
 
-        let preview = source.as_ref().0.0.join(name).with_extension("jpg");
-        PreviewFile(preview)
+    pub fn raw_file(&self) -> RawFile {
+        RawFile(self.0.with_extension(""))
     }
 
     /// Includes the extension
     pub fn file_stem(&self) -> &OsStr {
         self.0.file_stem().expect("A raw file always has a name")
+    }
+
+    pub fn parent_dir(&self) -> SourceDir {
+        SourceDir(Dir(self
+            .0
+            .parent()
+            .expect("an xmp file is always in a source dir")
+            .to_path_buf()))
     }
 }
 

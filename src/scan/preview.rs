@@ -1,5 +1,6 @@
 pub(crate) use std::future;
 use std::io::ErrorKind;
+use std::ops::Add;
 
 use color_eyre::eyre::Context;
 use futures::TryStreamExt;
@@ -84,7 +85,7 @@ pub(crate) async fn create_update_or_clean<Exporter: ImageExporter>(
     target: &TargetDir,
     fs: &ThrottledFs,
     previously_exported: &database::Db,
-) -> color_eyre::Result<usize> {
+) -> color_eyre::Result<isize> {
     xmp_files
         .iter()
         .cloned()
@@ -101,39 +102,65 @@ pub(crate) async fn create_update_or_clean<Exporter: ImageExporter>(
             .await
         })
         .collect::<FuturesUnordered<_>>()
-        .try_fold(0, |sum, i| future::ready(Ok(sum + i)))
+        .try_fold(0, |sum, i| future::ready(Ok(i + sum)))
         .await
+}
+
+#[derive(Debug)]
+pub enum Change {
+    None,
+    Added,
+    Removed,
+}
+
+impl Add<isize> for Change {
+    type Output = isize;
+
+    fn add(self, rhs: isize) -> Self::Output {
+        match self {
+            Change::None => rhs,
+            Change::Added => rhs + 1,
+            Change::Removed => rhs - 1,
+        }
+    }
 }
 
 pub(crate) async fn create_update_or_clean_one<Exporter: ImageExporter>(
     xmp: Xmp,
     xmp_file: &XmpFile,
-    source: impl AsRef<SourceDir>,
-    target: impl AsRef<TargetDir>,
+    source: &SourceDir,
+    target: &TargetDir,
     fs: &ThrottledFs,
     previously_exported: &database::Db,
-) -> color_eyre::Result<usize> {
-    let input_file = xmp.raw_file(source);
-    let output_file = xmp.preview_file(&target);
+) -> color_eyre::Result<Change> {
+    let raw = xmp.raw_file(&source);
+    let preview = xmp.preview_file(&target);
     if let Some(current_edits) = xmp.edits
         && let Some(exported_edits) = previously_exported.get(xmp_file)
         && current_edits != exported_edits
         && xmp.rated()
     {
-        Exporter::export(xmp_file, &input_file, &output_file, fs)
+        Exporter::export(xmp_file, &raw, &preview, fs)
             .await
             .wrap_err("failed to update preview")?;
         previously_exported.insert(xmp_file.clone(), current_edits);
-        Ok(1)
+        Ok(Change::Added)
     } else if xmp.rated() && xmp.preview_missing(target).await? {
-        Exporter::export(xmp_file, &input_file, &output_file, fs)
+        Exporter::export(xmp_file, &raw, &preview, fs)
             .await
             .wrap_err("failed to create preview")?;
         previously_exported.insert(xmp_file.clone(), xmp.edits.unwrap_or(EditHash::NO_EDITS));
-        Ok(1)
+        Ok(Change::Added)
+    } else if xmp.rated() {
+        Ok(Change::None)
     } else {
-        clean_up(&output_file)?;
-        Ok(0)
+        match std::fs::remove_file(&preview) {
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(Change::None),
+            Err(e) => Err(e)
+                .wrap_err("Could not remove preview jpg")
+                .note_path(&preview),
+            Ok(()) => Ok(Change::Removed),
+        }
     }
 }
 
