@@ -37,7 +37,6 @@ pub async fn should_remove(
     };
 
     if xmp.rated() {
-        debug!("preview of unrated file");
         Ok(false)
     } else {
         Ok(true)

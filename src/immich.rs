@@ -169,17 +169,21 @@ async fn maintain_immich_sync(
             .await?
             .map(|lib| (lib.import_path.clone(), lib))
             .collect();
+    tracing::debug!("Existing immich libs: {libs:?}");
 
-    tracing::debug!("waiting for immich sync event");
-    while let Some(event) = rx
-        .recv()
-        .race(
-            next_pending(&mut pending_scans)
-                .map(Event::PendingScan)
-                .map(Some),
-        )
-        .await
-    {
+    loop {
+        tracing::debug!("waiting for immich sync event");
+        let Some(event) = rx
+            .recv()
+            .race(
+                next_pending(&mut pending_scans)
+                    .map(Event::PendingScan)
+                    .map(Some),
+            )
+            .await
+        else {
+            break;
+        };
         tracing::debug!("immich sync event: {event:?}");
         match event {
             Event::EmptyDir(path) => {
