@@ -209,7 +209,7 @@ pub(crate) fn parse_edits(s: &str) -> Option<EditHash> {
 
     let start = s.find(start_pattern)? + start_pattern.len();
     let end = s[start..].find(end_pattern)?;
-    let edits = &s[start..end];
+    let edits = &s[start..start + end];
 
     let mut hasher = DefaultHasher::new();
     edits.hash(&mut hasher);
