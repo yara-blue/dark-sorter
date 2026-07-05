@@ -169,6 +169,8 @@ async fn maintain_immich_sync(
             .await?
             .map(|lib| (lib.import_path.clone(), lib))
             .collect();
+
+    tracing::debug!("waiting for immich sync event");
     while let Some(event) = rx
         .recv()
         .race(
@@ -190,7 +192,6 @@ async fn maintain_immich_sync(
                     lib
                 } else {
                     let new = add_managed_library(path.clone(), &base_dir, &mut immich).await?;
-                    debug!("added new library: {new:?}");
                     libs.insert(new.import_path.clone(), new);
                     libs.get_mut(&path).expect("just inserted")
                 };

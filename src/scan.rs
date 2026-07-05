@@ -9,6 +9,7 @@ use futures::{StreamExt, TryStreamExt};
 use futures_concurrency::future::TryJoin;
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReadDirStream;
+use tracing::debug;
 
 use crate::fs::{
     BaseSourceDir, BaseTargetDir, DirName, PreviewFile, SourceDir, TargetDir, ThrottledFs, XmpFile,
@@ -50,6 +51,7 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
     parsed_xmps: ParsedXmps,
     immich: Option<ImmichSync>,
 ) -> color_eyre::Result<()> {
+    debug!("Scanning: {}", target_dir.display());
     let read_source = fs
         .read_dir(&source_dir)
         .await
@@ -128,7 +130,7 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
         .map(|join_result| join_result.wrap_err("A panic occurred").flatten())
         .try_for_each(|()| future::ready(Ok(())));
 
-    let (_, change_in_previews, _) = (
+    let (_, change_in_previews) = (
         preview::remove_stale(&source_dir, previews.iter(), &parsed_xmps, &fs),
         preview::create_update_or_clean::<Exporter>(
             &xmp_files,
@@ -138,7 +140,6 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
             &fs,
             &previously_exported,
         ),
-        recursive_scans,
     )
         .try_join()
         .await?;
@@ -152,12 +153,13 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
             }
         }
         if let Some(immich) = immich {
-            immich.set_dir_empty(target_dir);
+            immich.set_dir_empty(target_dir.clone());
         }
     } else if let Some(immich) = immich {
-        immich.set_dir_not_empty(target_dir);
+        immich.set_dir_not_empty(target_dir.clone());
     }
-    Ok(())
+    debug!("Done scanning: {}", target_dir.display());
+    recursive_scans.await
 }
 
 // dear rustc gets into a cycle trying to figure out the return type of the tokio::spawn.

@@ -174,6 +174,7 @@ impl Immich {
 
     #[instrument(skip(self))]
     pub(super) async fn update_library(&self, id: &LibraryId) -> color_eyre::Result<()> {
+        debug!("triggering immich sync for library");
         let update_library = async || {
             self.http_request(Method::POST, &format!("libraries/{id}/scan"))
                 .await
@@ -213,6 +214,7 @@ impl Immich {
 
     #[instrument(skip(self))]
     pub(crate) async fn delete_library(&self, id: &LibraryId) -> color_eyre::Result<()> {
+        debug!("deleting immich library");
         let delete_library = async || {
             self.http_request(Method::DELETE, &format!("libraries/{id}"))
                 .await
