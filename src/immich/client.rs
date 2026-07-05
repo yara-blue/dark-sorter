@@ -256,7 +256,7 @@ impl Immich {
         let request = self
             .client
             .request(method, url)
-            .header("x-api-key", dbg!(&self.api_key.0).clone());
+            .header("x-api-key", &self.api_key.0.clone());
         let request = if let Some(body) = body {
             request.json(body)
         } else {
