@@ -107,19 +107,6 @@ impl Xmp {
         let edits = parse_edits(&s);
         let raw = parse_raw(&s)?;
 
-        let derived_from_path = path
-            .file_stem()
-            .to_str()
-            .ok_or(XmpError::FileNameNotUtf8)?
-            .to_string();
-
-        if *raw != *derived_from_path {
-            return Err(XmpError::RawNameMismatches {
-                listed_in_file: Arc::clone(&raw),
-                derived_from_path,
-            });
-        }
-
         Ok(Self { rating, edits, raw })
     }
 
@@ -166,19 +153,6 @@ pub enum XmpError {
     NoRawListed,
     #[error("The file name listed in the Xmp has no extension")]
     RawWithoutExtension,
-    /// Else the name of the identically named raw file cannot be stored in the xmp
-    #[error("Xmp file name must be valid utf8")]
-    FileNameNotUtf8,
-    #[error(
-        "The raw file listed in the xmp must have the same name \
-        as the xmp file without it's extension. \
-        raw file listed: {listed_in_file}, \
-        raw file derived from path: {derived_from_path}"
-    )]
-    RawNameMismatches {
-        listed_in_file: Arc<str>,
-        derived_from_path: String,
-    },
 }
 
 impl XmpError {
