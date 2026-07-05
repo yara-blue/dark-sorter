@@ -121,6 +121,7 @@ async fn main() -> color_eyre::Result<()> {
         .immich_api_key_path
         .map(|path| {
             std::fs::read_to_string(&path)
+                .map(|s| s.trim().to_string())
                 .wrap_err("Could not read Immich API key from file")
                 .note_path(path)
         })

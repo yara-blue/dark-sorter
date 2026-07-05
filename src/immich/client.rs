@@ -123,18 +123,18 @@ async fn retry<T, E: Error + CanBeRecoverable>(
         .take(60)
         .chain(ExponentialBackoff::from_millis(500).max_delay(Duration::from_mins(1)));
     for period in backoff {
-        match (operation)().await {
+        let recoverable_err = match (operation)().await {
             Ok(v) => return Ok(v),
-            Err(e) if e.is_recoverable() => (),
+            Err(e) if e.is_recoverable() => e,
             Err(e) => return Err(RetryError::Unrecoverable(e)),
-        }
+        };
         tokio::time::sleep(period).await;
         if period > Duration::from_secs(5) {
             if not_warned {
-                warn!("Retrying");
+                warn!("Retrying (err: {recoverable_err:?})");
                 not_warned = false;
             } else {
-                debug!("Retrying");
+                debug!("Retrying (err: {recoverable_err:?})");
             }
         }
     }
@@ -256,7 +256,7 @@ impl Immich {
         let request = self
             .client
             .request(method, url)
-            .header("x-api-key", self.api_key.0.clone());
+            .header("x-api-key", dbg!(&self.api_key.0).clone());
         let request = if let Some(body) = body {
             request.json(body)
         } else {
