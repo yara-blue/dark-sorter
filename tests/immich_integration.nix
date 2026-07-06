@@ -157,7 +157,6 @@ pkgs.testers.runNixOSTest {
     machine.wait_until_succeeds("test -f /target/subdir/rated2.jpg", timeout=60)
     libs = get_one_or_more_libs_from_immich()
     import_path = libs[0]["importPaths"][0]
-    print(f"************************************ pathhhhhh issss {import_path}")
     assert import_path == "/target/subdir"
   '';
 }

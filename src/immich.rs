@@ -28,7 +28,7 @@ use tracing::warn;
 
 mod client;
 
-fn name_for_dir(dir: &TargetDir, base_dir: &BaseTargetDir) -> String {
+fn lib_name_for_dir(dir: &TargetDir, base_dir: &BaseTargetDir) -> String {
     format!(
         "z-dark-sorter:/{}", // z: to get these to the bottom of any alphabetical list
         dir.relative_to_base(base_dir).display()
@@ -228,10 +228,7 @@ async fn add_managed_library(
     immich: &mut Immich,
 ) -> color_eyre::Result<ManagedLibrary> {
     debug!("adding new library to immich");
-    let name = format!(
-        "x-dark-sorter-{}", // x: to get these to the bottom of the list in immich
-        dir.relative_to_base(base_dir).display()
-    );
+    let name = lib_name_for_dir(&dir, base_dir);
     let lib = immich.create_library(Vec::new(), &dir, name).await?;
     assert_eq!(lib.import_paths.first(), Some(&dir.display().to_string()));
     Ok(ManagedLibrary {
@@ -263,7 +260,7 @@ async fn get_managed_libraries(
             if lib.owner_id == client.id
                 && let Some(path) = lib.import_paths.first()
                 && let Ok(dir) = TargetDir::try_new(path, base_dir)
-                && lib.name == name_for_dir(&dir, base_dir)
+                && lib.name.starts_with("z-dark-sorter:/")
             {
                 Some(ManagedLibrary {
                     id: lib.id,
