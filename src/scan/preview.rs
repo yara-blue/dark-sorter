@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 pub(crate) use std::future;
 use std::io::ErrorKind;
 use std::ops::Add;
@@ -135,15 +136,11 @@ pub(crate) async fn create_update_or_clean_one<Exporter: ImageExporter>(
         && current_edits != exported_edits
         && xmp.rated()
     {
-        Exporter::export(xmp_file, &raw, &preview, fs)
-            .await
-            .wrap_err("failed to update preview")?;
+        export_or_move::<Exporter>(&xmp_file, &raw, &preview, fs).await?;
         previously_exported.insert(xmp_file.clone(), current_edits);
         Ok(Change::Added)
     } else if xmp.rated() && xmp.preview_missing(target).await? {
-        Exporter::export(xmp_file, &raw, &preview, fs)
-            .await
-            .wrap_err("failed to create preview")?;
+        export_or_move::<Exporter>(&xmp_file, &raw, &preview, fs).await?;
         previously_exported.insert(
             xmp_file.clone(),
             xmp.edit_hash().unwrap_or(EditHash::NO_EDITS),
@@ -159,6 +156,21 @@ pub(crate) async fn create_update_or_clean_one<Exporter: ImageExporter>(
                 .note_path(&preview),
             Ok(()) => Ok(Change::Removed),
         }
+    }
+}
+
+async fn export_or_move<Exporter: ImageExporter>(
+    xmp_file: &XmpFile,
+    raw: &RawFile,
+    preview: &PreviewFile,
+    fs: &ThrottledFs,
+) -> color_eyre::Result<()> {
+    if raw.0.extension() == Some(OsStr::new("jpg")) {
+        fs.copy_file(raw, preview).await
+    } else {
+        Exporter::export(xmp_file, raw, preview, fs)
+            .await
+            .wrap_err("failed to create preview")
     }
 }
 

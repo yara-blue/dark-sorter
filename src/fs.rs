@@ -13,6 +13,8 @@ use tokio::io;
 use tokio::sync::Semaphore;
 use tracing::debug;
 
+use crate::watcher::EyreWithPath;
+
 /// Limit concurrent fs access so we do not exceed the open file handle limit.
 #[derive(Clone)]
 pub struct ThrottledFs {
@@ -68,6 +70,21 @@ impl ThrottledFs {
         );
         tokio::fs::symlink(original, &link).await?;
         std::os::unix::fs::lchown(link, Some(self.user), Some(self.group))
+    }
+
+    pub async fn copy_file(
+        &self,
+        raw: &RawFile,
+        preview: &PreviewFile,
+    ) -> Result<(), color_eyre::eyre::Error> {
+        tokio::fs::copy(raw, preview)
+            .await
+            .wrap_err("Failed to copy jpg source to target dir")
+            .note_path(raw)
+            .note_path(preview)?;
+        std::os::unix::fs::chown(preview, Some(self.user), Some(self.group))
+            .wrap_err("Could not set permissions for copied preview file")
+            .note_path(preview)
     }
 }
 
