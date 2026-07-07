@@ -42,7 +42,7 @@ use futures::{StreamExt, TryStreamExt};
 use libc::FAN_CLOSE_WRITE;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, trace};
 
 use crate::fs::{TargetDir, ThrottledFs, XmpFile};
 use crate::immich::ImmichSync;
@@ -163,12 +163,13 @@ pub async fn handle_event<Exporter: ImageExporter>(
         .wrap_err("Could not read xmp file")
         .note_path(&xmp_file)?
     else {
-        // Must have gotten deleted again before we got to this event
+        debug!("xmp file in event did not exist, probably already deleted: skipping");
         return Ok(());
     };
     let preview = xmp_file.preview_path(base_source, base_target);
     let target = preview.parent_dir();
     let source = xmp_file.parent_dir();
+    trace!("xmp for event: {xmp:?}");
 
     let change = match event.kind {
         EventKind::FileDeleted | EventKind::FileMovedFrom => {
@@ -186,6 +187,7 @@ pub async fn handle_event<Exporter: ImageExporter>(
         }
     };
 
+    debug!("Handling event resulted in change: {change:?}");
     match change {
         Change::Added => {
             if let Some(im) = immich {

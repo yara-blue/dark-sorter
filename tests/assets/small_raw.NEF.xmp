@@ -10,7 +10,7 @@
     xmlns:lr="http://ns.adobe.com/lightroom/1.0/"
    exif:DateTimeOriginal="2000:11:19 13:01:50.240"
    xmpMM:DerivedFrom="<FILENAME>.NEF"
-	   xmp:Rating="<RATING>"
+   xmp:Rating="<RATING>"
    darktable:import_timestamp="63918170767513495"
    darktable:change_timestamp="-1"
    darktable:export_timestamp="-1"

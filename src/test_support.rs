@@ -147,6 +147,7 @@ pub fn add_rating(source: &SourceDir, test_file: TestFile) {
 }
 
 pub fn add_file(file: TestFile, rating: Rating, source: impl AsRef<SourceDir>) {
+    info!("adding test file: {file:?}, with rating: {rating:?}");
     std::fs::write(
         // needs to match xmp file content
         file.xmp_file(&source).raw_file(),
@@ -161,7 +162,7 @@ pub fn add_file(file: TestFile, rating: Rating, source: impl AsRef<SourceDir>) {
         file.xmp_file(source),
         include_str!("../tests/assets/small_raw.NEF.xmp")
             .replace("<FILENAME>", file.name())
-            .replace("<RATING>", &rating.number().to_string()),
+            .replace("<RATING>", &dbg!(dbg!(rating).number()).to_string()),
     )
     .unwrap();
 }
@@ -202,7 +203,7 @@ pub fn test_setup() {
         color_eyre::install().unwrap();
         tracing_subscriber::registry()
             .with(fmt::layer().pretty())
-            .with(LevelFilter::DEBUG)
+            .with(LevelFilter::TRACE)
             .with(ErrorLayer::default())
             .init();
     });

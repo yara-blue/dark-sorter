@@ -36,11 +36,7 @@ pub async fn should_remove(
         Err(e) => return Err(e).wrap_err("Could not read xmp"),
     };
 
-    if xmp.rated() {
-        Ok(false)
-    } else {
-        Ok(true)
-    }
+    if xmp.rated() { Ok(false) } else { Ok(true) }
 }
 
 #[tracing::instrument(skip(xmps, fs))]
@@ -134,7 +130,7 @@ pub(crate) async fn create_update_or_clean_one<Exporter: ImageExporter>(
 ) -> color_eyre::Result<Change> {
     let raw = xmp.raw_file(&source);
     let preview = xmp.preview_file(&target);
-    if let Some(current_edits) = xmp.edits
+    if let Some(current_edits) = xmp.edit_hash()
         && let Some(exported_edits) = previously_exported.get(xmp_file)
         && current_edits != exported_edits
         && xmp.rated()
@@ -148,7 +144,10 @@ pub(crate) async fn create_update_or_clean_one<Exporter: ImageExporter>(
         Exporter::export(xmp_file, &raw, &preview, fs)
             .await
             .wrap_err("failed to create preview")?;
-        previously_exported.insert(xmp_file.clone(), xmp.edits.unwrap_or(EditHash::NO_EDITS));
+        previously_exported.insert(
+            xmp_file.clone(),
+            xmp.edit_hash().unwrap_or(EditHash::NO_EDITS),
+        );
         Ok(Change::Added)
     } else if xmp.rated() {
         Ok(Change::None)

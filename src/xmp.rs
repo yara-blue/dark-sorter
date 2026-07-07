@@ -12,6 +12,8 @@ use tokio::sync::Notify;
 use crate::fs::{PreviewFile, RawFile, SourceDir, TargetDir, ThrottledFs, XmpFile};
 use crate::watcher::EyreWithPath;
 
+mod edits;
+
 #[derive(Default, Clone)]
 pub(crate) struct ParsedXmps(Arc<spin::Mutex<HashMap<XmpFile, XmpState>>>);
 
@@ -92,7 +94,7 @@ impl EditHash {
 pub struct Xmp {
     pub(crate) rating: Rating,
     /// if the edits changed we need to re-export
-    pub(crate) edits: Option<EditHash>,
+    pub(crate) edits: Vec<edits::Edit>,
     pub(crate) raw: Arc<str>,
 }
 
@@ -104,10 +106,18 @@ impl Xmp {
             .map_err(|e| XmpError::from_io(e, path))?;
 
         let rating = Rating::from_str(&s)?;
-        let edits = parse_edits(&s);
+        let edits = edits::parse_edits(&s)
+            .map_err(Arc::new)
+            .map_err(XmpError::ParseEdits)?;
         let raw = parse_raw(&s)?;
 
         Ok(Self { rating, edits, raw })
+    }
+
+    pub fn edit_hash(&self) -> Option<EditHash> {
+        let mut hasher = DefaultHasher::new();
+        self.edits.hash(&mut hasher);
+        Some(EditHash(hasher.finish()))
     }
 
     pub fn preview_file(&self, target: &TargetDir) -> PreviewFile {
@@ -153,6 +163,8 @@ pub enum XmpError {
     NoRawListed,
     #[error("The file name listed in the Xmp has no extension")]
     RawWithoutExtension,
+    #[error("Could not parse the list of edits")]
+    ParseEdits(Arc<miette::Report>),
 }
 
 impl XmpError {
@@ -175,19 +187,6 @@ pub(crate) fn parse_raw(s: &str) -> Result<Arc<str>, XmpError> {
     } else {
         Err(XmpError::RawWithoutExtension)
     }
-}
-
-pub(crate) fn parse_edits(s: &str) -> Option<EditHash> {
-    let start_pattern = r"<darktable:history>";
-    let end_pattern = r"</darktable:history>";
-
-    let start = s.find(start_pattern)? + start_pattern.len();
-    let end = s[start..].find(end_pattern)?;
-    let edits = &s[start..start + end];
-
-    let mut hasher = DefaultHasher::new();
-    edits.hash(&mut hasher);
-    Some(EditHash(hasher.finish()))
 }
 
 #[repr(i8)]
