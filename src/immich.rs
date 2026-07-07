@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::future::pending;
 use std::panic;
@@ -11,13 +10,17 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::fs::BaseTargetDir;
+use crate::fs::PreviewFile;
 use crate::fs::TargetDir;
-use crate::immich::client::LibraryId;
+use crate::immich::client::AssetId;
+use crate::immich::client::ExternalLibraryId;
+use crate::immich::client::SearchFilters;
 pub use client::ApiKey;
 use client::Immich;
 
 use futures::FutureExt as _;
 use futures_concurrency::future::FutureExt;
+use itertools::Itertools;
 use reqwest::Url;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
@@ -49,7 +52,7 @@ impl ImmichSync {
     }
 
     #[instrument(skip(self))]
-    pub fn set_dir_empty(&self, dir: TargetDir) {
+    pub fn signal_dir_empty(&self, dir: TargetDir) {
         debug!("ImmichSync: marking dir as empty");
         match self.tx.try_send(Event::EmptyDir(dir)) {
             Err(TrySendError::Full(_)) => self.mark_overflow(),
@@ -59,9 +62,9 @@ impl ImmichSync {
     }
 
     #[instrument(skip(self))]
-    pub fn set_dir_not_empty(&self, dir: TargetDir) {
+    pub fn signal_file_modified_or_added(&self, file: PreviewFile) {
         debug!("ImmichSync: marking dir as not empty");
-        match self.tx.try_send(Event::NonEmptyDir(dir)) {
+        match self.tx.try_send(Event::ModifiedOrAdded(file)) {
             Err(TrySendError::Full(_)) => self.mark_overflow(),
             Err(TrySendError::Closed(_)) => self.report_error_or_continue_panic(),
             Ok(_) => (),
@@ -133,27 +136,29 @@ impl ImmichSync {
 #[derive(Debug)]
 pub enum Event {
     EmptyDir(TargetDir),
-    NonEmptyDir(TargetDir),
-    PendingScan(LibraryId),
+    ModifiedOrAdded(PreviewFile),
+    PendingScan(PendingScan),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct PendingScan {
+pub struct PendingScan {
     triggers_at: time::Instant,
-    library_id: LibraryId,
+    library_id: ExternalLibraryId,
+    paths: Vec<PreviewFile>,
 }
 
-async fn next_pending(pending_scans: &mut BTreeSet<PendingScan>) -> LibraryId {
-    if let Some(pending) = pending_scans.first() {
-        time::sleep_until(pending.triggers_at).await;
-    } else {
-        pending::<()>().await
-    }
+async fn next_pending(pending_scans: &mut Vec<PendingScan>) -> PendingScan {
+    let Some(idx) = pending_scans
+        .iter()
+        .position_min_by_key(|ps| ps.triggers_at)
+    else {
+        pending::<()>().await;
+        unreachable!();
+    };
 
-    pending_scans
-        .pop_first()
-        .expect("guarded by if (the non arm diverges through the await)")
-        .library_id
+    let pending = pending_scans.swap_remove(idx);
+    time::sleep_until(pending.triggers_at).await;
+    pending
 }
 
 struct ImmichHandleDropped;
@@ -163,7 +168,7 @@ async fn maintain_immich_sync(
     base_dir: BaseTargetDir,
     mut rx: tokio::sync::mpsc::Receiver<Event>,
 ) -> color_eyre::Result<ImmichHandleDropped> {
-    let mut pending_scans = BTreeSet::new();
+    let mut pending_scans = Vec::new();
     let mut libs: HashMap<TargetDir, ManagedLibrary> =
         get_managed_libraries(&mut immich, &base_dir)
             .await?
@@ -191,29 +196,39 @@ async fn maintain_immich_sync(
                     immich.delete_library(&lib.id).await?;
                 }
             }
-            Event::NonEmptyDir(path) => {
-                let lib = if let Some(lib) = libs.get_mut(&path) {
+            Event::ModifiedOrAdded(preview_file) => {
+                let dir = preview_file.parent_dir();
+                let lib = if let Some(lib) = libs.get_mut(&dir) {
                     lib
                 } else {
-                    let new = add_managed_library(path.clone(), &base_dir, &mut immich).await?;
+                    let new = add_managed_library(dir.clone(), &base_dir, &mut immich).await?;
                     libs.insert(new.import_path.clone(), new);
-                    libs.get_mut(&path).expect("just inserted")
+                    libs.get_mut(&dir).expect("just inserted")
                 };
 
-                if let Some(t) = lib.last_scanned
-                    && t.elapsed().as_secs() > 30
-                {
-                    lib.last_scanned = Some(Instant::now());
-                    immich.update_library(&lib.id).await?;
+                if let Some(pending) = pending_scans.iter_mut().find(|p| p.library_id == lib.id) {
+                    pending.paths.push(preview_file)
                 } else {
-                    pending_scans.insert(PendingScan {
-                        triggers_at: time::Instant::now() + Duration::from_secs(30),
+                    let scan_in = if let Some(t) = lib.last_scanned
+                        && t.elapsed().as_secs() > 30
+                    {
+                        Duration::ZERO
+                    } else {
+                        Duration::from_secs(30)
+                    };
+
+                    pending_scans.push(PendingScan {
+                        triggers_at: time::Instant::now() + scan_in,
                         library_id: lib.id.clone(),
+                        paths: vec![preview_file],
                     });
                 }
             }
-            Event::PendingScan(id) => {
-                immich.update_library(&id).await?;
+            Event::PendingScan(pending) => {
+                immich.update_library(&pending.library_id).await?;
+                // TODO rework this to use tasks, store handles in pending scans?
+                // OR schedule yet another follow up that does the polling whether
+                // the scan has completed...
             }
         }
     }
@@ -241,7 +256,7 @@ async fn add_managed_library(
 #[derive(Debug)]
 struct ManagedLibrary {
     // Library ID
-    id: LibraryId,
+    id: ExternalLibraryId,
     // Paths immich checks for images
     import_path: TargetDir,
     // When did we last issue a scan?
@@ -271,4 +286,22 @@ async fn get_managed_libraries(
                 None
             }
         }))
+}
+
+async fn get_asset_from_path(
+    immich: &mut Immich,
+    path: &PreviewFile,
+    library_id: ExternalLibraryId,
+) -> color_eyre::Result<AssetId> {
+    let mut filters = SearchFilters::default();
+    filters.library_id = Some(library_id);
+    filters.original_path = Some(path.0.clone());
+    let mut response = immich.search_assets(filters).await?;
+
+    assert_eq!(
+        response.assets.items.len(),
+        1,
+        "External libraries can only have a single asset for each path"
+    );
+    Ok(response.assets.items.pop().expect("see assert above").id)
 }

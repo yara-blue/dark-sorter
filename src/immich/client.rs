@@ -1,7 +1,7 @@
 use core::fmt;
 use std::convert::Infallible;
 use std::error::Error;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -19,7 +19,7 @@ use tracing::{debug, instrument, warn};
 #[serde(rename_all = "camelCase")]
 pub struct Library {
     // Library ID
-    pub id: LibraryId,
+    pub id: ExternalLibraryId,
     // Import paths
     pub import_paths: Vec<String>,
     // Library name
@@ -47,6 +47,42 @@ pub struct CreateLibrary {
     name: String,
     // Owner user ID
     owner_id: UserId,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchFilters {
+    // Filter by original file path
+    pub original_path: Option<PathBuf>,
+    // Library ID to filter by
+    pub library_id: Option<ExternalLibraryId>,
+}
+
+/// There is also an albums field we skip (don't need it)
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResponse {
+    pub assets: SearchAssetsResponse,
+}
+
+/// There is also an facets field which we skip
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchAssetsResponse {
+    pub count: usize,
+    pub items: Vec<AssetResponseDto>,
+    #[serde(rename = "next_page")]
+    next_page_token: String,
+    pub total: usize,
+}
+
+/// There are _many_ fields, but we only need the asset-id now so we skip all those
+/// https://api.immich.app/models/AssetResponseDto
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetResponseDto {
+    /// asset id
+    pub(crate) id: AssetId,
 }
 
 #[derive(Clone)]
@@ -92,6 +128,7 @@ macro_rules! uuid_wrapper {
         pub struct $name(String);
 
         impl $name {
+            #[allow(dead_code)]
             pub const ZERO: Self = Self(String::new());
         }
 
@@ -104,7 +141,8 @@ macro_rules! uuid_wrapper {
 }
 
 uuid_wrapper!(UserId);
-uuid_wrapper!(LibraryId);
+uuid_wrapper!(AssetId);
+uuid_wrapper!(ExternalLibraryId);
 
 #[derive(Debug, thiserror::Error)]
 pub enum RetryError<E: Error> {
@@ -173,7 +211,7 @@ impl Immich {
     }
 
     #[instrument(skip(self))]
-    pub(super) async fn update_library(&self, id: &LibraryId) -> color_eyre::Result<()> {
+    pub(super) async fn update_library(&self, id: &ExternalLibraryId) -> color_eyre::Result<()> {
         debug!("triggering immich sync for library");
         let update_library = async || {
             self.http_request(Method::POST, &format!("libraries/{id}/scan"))
@@ -213,7 +251,7 @@ impl Immich {
     }
 
     #[instrument(skip(self))]
-    pub(crate) async fn delete_library(&self, id: &LibraryId) -> color_eyre::Result<()> {
+    pub(crate) async fn delete_library(&self, id: &ExternalLibraryId) -> color_eyre::Result<()> {
         debug!("deleting immich library");
         let delete_library = async || {
             self.http_request(Method::DELETE, &format!("libraries/{id}"))
@@ -222,6 +260,17 @@ impl Immich {
         retry(delete_library)
             .await
             .wrap_err("Could not delete library")
+    }
+
+    pub(crate) async fn search_assets(
+        &self,
+        filters: SearchFilters,
+    ) -> Result<SearchResponse, color_eyre::eyre::Error> {
+        let search = async || {
+            self.http_request_with_body(Method::POST, "/search/metadata", &filters)
+                .await
+        };
+        retry(search).await.wrap_err("Could not search for asset")
     }
 
     #[instrument(skip_all, fields(method=%method, url))]
@@ -288,6 +337,7 @@ trait IsUnitOrDeserialize: DeserializeOwned {
 
 impl IsUnitOrDeserialize for Vec<Library> {}
 impl IsUnitOrDeserialize for Library {}
+impl IsUnitOrDeserialize for SearchResponse {}
 impl IsUnitOrDeserialize for User {}
 impl IsUnitOrDeserialize for () {
     fn is_unit() -> Option<Self> {
@@ -336,4 +386,3 @@ impl CanBeRecoverable for ApiError {
         }
     }
 }
-

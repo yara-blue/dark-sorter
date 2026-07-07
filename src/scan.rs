@@ -15,6 +15,7 @@ use crate::fs::{
     BaseSourceDir, BaseTargetDir, DirName, PreviewFile, SourceDir, TargetDir, ThrottledFs, XmpFile,
 };
 use crate::immich::ImmichSync;
+use crate::scan::preview::Change;
 use crate::watcher::{EyreWithPath, ResultExt};
 use crate::xmp::ParsedXmps;
 use crate::{ImageExporter, database};
@@ -130,7 +131,7 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
         .map(|join_result| join_result.wrap_err("A panic occurred").flatten())
         .try_for_each(|()| future::ready(Ok(())));
 
-    let (_, change_in_previews) = (
+    let (_, changes) = (
         preview::remove_stale(&source_dir, previews.iter(), &parsed_xmps, &fs),
         preview::create_update_or_clean::<Exporter>(
             &xmp_files,
@@ -144,7 +145,7 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
         .try_join()
         .await?;
 
-    if previews.len() as isize + change_in_previews == 0 {
+    if previews.len() as isize + changes.iter().map(Change::as_num).sum::<isize>() == 0 {
         if target_dir != base_target_dir.0 {
             match tokio::fs::remove_dir(&target_dir).await {
                 Ok(()) => {}
@@ -153,10 +154,12 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
             }
         }
         if let Some(immich) = immich {
-            immich.set_dir_empty(target_dir.clone());
+            immich.signal_dir_empty(target_dir.clone());
         }
     } else if let Some(immich) = immich {
-        immich.set_dir_not_empty(target_dir.clone());
+        for added in changes.into_iter().filter_map(Change::added) {
+            immich.signal_file_modified_or_added(added);
+        }
     }
     debug!("Done scanning: {}", target_dir.display());
     recursive_scans.await

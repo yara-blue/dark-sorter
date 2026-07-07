@@ -181,7 +181,7 @@ pub async fn handle_event<Exporter: ImageExporter>(
         // the rating.
         EventKind::FileModificationComplete | EventKind::FileMovedTo => {
             crate::scan::preview::create_update_or_clean_one::<Exporter>(
-                xmp, &xmp_file, &source, &target, fs, db,
+                xmp, xmp_file, &source, &target, fs, db,
             )
             .await?
         }
@@ -189,9 +189,9 @@ pub async fn handle_event<Exporter: ImageExporter>(
 
     debug!("Handling event resulted in change: {change:?}");
     match change {
-        Change::Added => {
+        Change::Added(_) => {
             if let Some(im) = immich {
-                im.set_dir_not_empty(preview.parent_dir())
+                im.signal_file_modified_or_added(preview);
             }
         }
         Change::Removed if no_previews_in(&target).await? => {
@@ -205,7 +205,7 @@ pub async fn handle_event<Exporter: ImageExporter>(
             }
 
             if let Some(im) = immich {
-                im.set_dir_empty(target);
+                im.signal_dir_empty(target);
             }
         }
         Change::None | Change::Removed => (),

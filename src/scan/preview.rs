@@ -1,14 +1,13 @@
 use std::ffi::OsStr;
 pub(crate) use std::future;
 use std::io::ErrorKind;
-use std::ops::Add;
 
 use color_eyre::eyre::Context;
 use futures::TryStreamExt;
 use futures::stream::FuturesUnordered;
 use tracing::{debug, instrument};
 
-use crate::fs::{PreviewFile, SourceDir, TargetDir, ThrottledFs, XmpFile};
+use crate::fs::{PreviewFile, RawFile, SourceDir, TargetDir, ThrottledFs, XmpFile};
 use crate::watcher::{EyreWithPath, ResultExt};
 use crate::xmp::{EditHash, ParsedXmps, Xmp};
 use crate::{ImageExporter, database, xmp};
@@ -81,7 +80,7 @@ pub(crate) async fn create_update_or_clean<Exporter: ImageExporter>(
     target: &TargetDir,
     fs: &ThrottledFs,
     previously_exported: &database::Db,
-) -> color_eyre::Result<isize> {
+) -> color_eyre::Result<Vec<Change>> {
     xmp_files
         .iter()
         .cloned()
@@ -89,7 +88,7 @@ pub(crate) async fn create_update_or_clean<Exporter: ImageExporter>(
             let xmp = xmps.get_cached_or_read_from_file(&xmp_file, fs).await?;
             create_update_or_clean_one::<Exporter>(
                 xmp,
-                &xmp_file,
+                xmp_file,
                 source,
                 target,
                 fs,
@@ -98,32 +97,37 @@ pub(crate) async fn create_update_or_clean<Exporter: ImageExporter>(
             .await
         })
         .collect::<FuturesUnordered<_>>()
-        .try_fold(0, |sum, i| future::ready(Ok(i + sum)))
+        .try_collect()
         .await
 }
 
 #[derive(Debug)]
 pub enum Change {
     None,
-    Added,
+    Added(PreviewFile),
     Removed,
 }
 
-impl Add<isize> for Change {
-    type Output = isize;
-
-    fn add(self, rhs: isize) -> Self::Output {
+impl Change {
+    pub fn added(self) -> Option<PreviewFile> {
         match self {
-            Change::None => rhs,
-            Change::Added => rhs + 1,
-            Change::Removed => rhs - 1,
+            Change::Added(file) => Some(file),
+            Change::Removed | Change::None => None,
+        }
+    }
+
+    pub fn as_num(&self) -> isize {
+        match self {
+            Change::None => 0,
+            Change::Added(_) => 1,
+            Change::Removed => -1,
         }
     }
 }
 
 pub(crate) async fn create_update_or_clean_one<Exporter: ImageExporter>(
     xmp: Xmp,
-    xmp_file: &XmpFile,
+    xmp_file: XmpFile,
     source: &SourceDir,
     target: &TargetDir,
     fs: &ThrottledFs,
@@ -132,20 +136,20 @@ pub(crate) async fn create_update_or_clean_one<Exporter: ImageExporter>(
     let raw = xmp.raw_file(&source);
     let preview = xmp.preview_file(&target);
     if let Some(current_edits) = xmp.edit_hash()
-        && let Some(exported_edits) = previously_exported.get(xmp_file)
+        && let Some(exported_edits) = previously_exported.get(&xmp_file)
         && current_edits != exported_edits
         && xmp.rated()
     {
         export_or_move::<Exporter>(&xmp_file, &raw, &preview, fs).await?;
         previously_exported.insert(xmp_file.clone(), current_edits);
-        Ok(Change::Added)
+        Ok(Change::Added(preview))
     } else if xmp.rated() && xmp.preview_missing(target).await? {
         export_or_move::<Exporter>(&xmp_file, &raw, &preview, fs).await?;
         previously_exported.insert(
             xmp_file.clone(),
             xmp.edit_hash().unwrap_or(EditHash::NO_EDITS),
         );
-        Ok(Change::Added)
+        Ok(Change::Added(preview))
     } else if xmp.rated() {
         Ok(Change::None)
     } else {
