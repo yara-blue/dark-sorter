@@ -1,3 +1,17 @@
+//! At any point the program may abort so we gotta on startup
+//! verify all the work is done. We can rely on none of the work
+//! done in response to changes (via the watcher).
+//!
+//! We do not need the target dir to be in the correct state since
+//! we'll get updates of it getting to the correct state and can
+//! just handle those.
+//!
+//! So:
+//! - Get immich external libs.
+//! - Scan target adding all the missing external libs
+//!   (and scheduling a scan + follow up)
+//! - Scan target adding all missing asset descriptions
+//!
 use std::collections::HashMap;
 use std::future::pending;
 use std::panic;
@@ -112,7 +126,7 @@ impl ImmichSync {
         api_key: ApiKey,
         base_dir: &BaseTargetDir,
     ) -> color_eyre::Result<ImmichSync> {
-        let client = client::Immich::new(url, api_key).await?;
+        let mut client = client::Immich::new(url, api_key).await?;
         // Don't make the buffer too large, we might never empty it if immich is down.
         let (tx, rx) = mpsc::channel(512);
         let base_dir = base_dir.clone();
@@ -121,7 +135,10 @@ impl ImmichSync {
         let thread = std::thread::spawn(move || {
             tokio::runtime::LocalRuntime::new()
                 .unwrap()
-                .block_on(async move { maintain_immich_sync(client, base_dir, rx).await })
+                .block_on(async move {
+                    do_initial_scan(&mut client, &base_dir).await?;
+                    maintain_immich_sync(client, base_dir, rx).await
+                })
         });
         Ok(ImmichSync {
             tx,
@@ -131,7 +148,12 @@ impl ImmichSync {
     }
 }
 
-// TODO do not symlink, just write the preview to the target dir
+async fn do_initial_scan(client: &mut Immich, base_dir: &BaseTargetDir) -> color_eyre::Result<()> {
+    let libs = get_managed_libraries(client, base_dir).await?;
+    todo!();
+
+    Ok(())
+}
 
 #[derive(Debug)]
 pub enum Event {
