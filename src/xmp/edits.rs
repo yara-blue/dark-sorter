@@ -14,8 +14,10 @@ pub(crate) fn parse_edits(s: &str) -> Result<Vec<Edit>, miette::Report> {
         let Ok(()) = s.advance_beyond(r"<darktable:history>") else {
             return Ok(Vec::new());
         };
-        s.advance_beyond(r"<rdf:Seq>")
-            .map_err(ParseFieldsError::MissingSequenceStart)?;
+        if s.advance_beyond(r"<rdf:Seq>").is_err() {
+            // xmp uses having only the end tag `<rfd:Seq/>` to signal an empty sequence
+            return Ok(Vec::new());
+        }
         s.accept_one_or_more_whitespace()?;
         std::iter::from_fn(|| s.accept_field().transpose())
             .try_collect()
@@ -27,12 +29,6 @@ pub(crate) fn parse_edits(s: &str) -> Result<Vec<Edit>, miette::Report> {
 
 #[derive(Diagnostic, Error, Clone, Debug, PartialEq, Eq)]
 enum ParseFieldsError {
-    #[error("XMP is missing the sequence start marker")]
-    MissingSequenceStart(
-        #[diagnostic_source]
-        #[from]
-        AdvanceBeyondError,
-    ),
     #[error("Could not parse one of the edits")]
     Field(
         #[diagnostic_source]

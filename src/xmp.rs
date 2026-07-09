@@ -233,3 +233,15 @@ impl Rating {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn parse() {
+        let fs = ThrottledFs::for_testing().unwrap();
+        let path = XmpFile(Path::new("tests/assets/_DSC3794.NEF.xmp").to_path_buf());
+        Xmp::read_from_file(&path, &fs).await.unwrap();
+    }
+}

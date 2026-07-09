@@ -39,27 +39,6 @@ pub async fn should_remove(
     if xmp.rated() { Ok(false) } else { Ok(true) }
 }
 
-#[tracing::instrument(skip(xmps, fs))]
-pub async fn remove_if_stale(
-    source_dir: &SourceDir,
-    preview: &PreviewFile,
-    xmps: &xmp::ParsedXmps,
-    fs: &ThrottledFs,
-) -> color_eyre::Result<()> {
-    if should_remove(preview, source_dir, xmps, fs)
-        .await
-        .wrap_err("Could not determine whether link should be removed")?
-    {
-        debug!("removing stale link");
-        tokio::fs::remove_file(&preview)
-            .await
-            .wrap_err("Could not remove preview file")
-            .note_path(preview)
-    } else {
-        Ok(())
-    }
-}
-
 pub async fn remove_stale(
     source_dir: &SourceDir,
     previews: impl Iterator<Item = &PreviewFile>,
@@ -67,7 +46,20 @@ pub async fn remove_stale(
     fs: &ThrottledFs,
 ) -> color_eyre::Result<()> {
     previews
-        .map(|preview| remove_if_stale(source_dir, preview, xmps, fs))
+        .map(|preview| async move {
+            if should_remove(preview, source_dir, xmps, fs)
+                .await
+                .wrap_err("Could not determine whether preview should be removed")?
+            {
+                debug!("removing stale preview");
+                tokio::fs::remove_file(&preview)
+                    .await
+                    .wrap_err("Could not remove preview file")
+                    .note_path(preview)
+            } else {
+                Ok(())
+            }
+        })
         .collect::<FuturesUnordered<_>>()
         .try_for_each(|()| future::ready(Ok(())))
         .await
