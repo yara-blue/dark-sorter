@@ -136,7 +136,7 @@ impl ImmichSync {
             tokio::runtime::LocalRuntime::new()
                 .unwrap()
                 .block_on(async move {
-                    do_initial_scan(&mut client, &base_dir).await?;
+                    // do_initial_scan(&mut client, &base_dir).await?;
                     maintain_immich_sync(client, base_dir, rx).await
                 })
         });

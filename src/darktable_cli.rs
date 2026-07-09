@@ -55,6 +55,8 @@ pub async fn export(
         .arg("--core")
         .arg("--library")
         .arg(":memory:") // don't create a darktable library file
+        .arg("--conf")
+        .arg("plugins/lighttable/export/metadata_flags=1")
         // can't stop darktable from getting configs give it a place to put them
         // it derives it's paths from home so we gotta give it one.
         .env("HOME", &darktable_home(fs)?)
