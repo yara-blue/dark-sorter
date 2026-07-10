@@ -106,6 +106,22 @@ async fn asses_file_state(
         .suggestion("Ensure dark-sorter is set up to use the correct user")?;
     }
 
+    if let Some(output_dir) = fs
+        .metadata(output_file.parent_dir())
+        .await
+        .map(Some)
+        .ignore_err_if(|e| e.kind() == ErrorKind::NotFound, None)
+        .wrap_err("Could not check for existing output dir")
+        .note_path(output_file.parent_dir())?
+        && !output_dir.user_can_write(fs.user)
+    {
+        return Err(eyre!(
+            "The darktable-cli user has no permissions to write to the parent directory"
+        ))
+        .note_path(output_file.parent_dir())
+        .suggestion("Manually change the permissions or ownership");
+    }
+
     let Some(output) = fs
         .metadata(output_file)
         .await

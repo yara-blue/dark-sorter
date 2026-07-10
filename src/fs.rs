@@ -191,7 +191,6 @@ impl TargetDir {
 
     pub fn try_new(path: impl AsRef<Path>, base: &BaseTargetDir) -> Result<Self, NotBaseSubDir> {
         let path = path.as_ref();
-        dbg!(path, base);
         if path.starts_with(base) {
             Ok(Self(Dir(path.to_path_buf())))
         } else {
