@@ -1,6 +1,7 @@
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::num::ParseIntError;
 
-use crate::xmp::edits::helpers::{AdvanceBeyondError, ParserHelper};
+use crate::xmp::edits::helpers::ParserHelper;
 
 use itertools::Itertools;
 use miette::{Diagnostic, SourceSpan};
@@ -11,7 +12,7 @@ mod helpers;
 pub(crate) fn parse_edits(s: &str) -> Result<Vec<Edit>, miette::Report> {
     fn inner(s: &str) -> Result<Vec<Edit>, ParseFieldsError> {
         let mut s = ParserHelper::new(s);
-        let Ok(()) = s.advance_beyond(r"<darktable:history>") else {
+        let Ok(_) = s.advance_beyond(r"<darktable:history>") else {
             return Ok(Vec::new());
         };
         if s.advance_beyond(r"<rdf:Seq>").is_err() {
@@ -45,6 +46,7 @@ pub struct Edit {
     num: usize,
     operation: Operation,
     enabled: bool,
+    pub hash: u64,
 }
 
 #[derive(Diagnostic, Error, Clone, Debug, PartialEq, Eq)]
@@ -75,6 +77,7 @@ impl ParserHelper<'_> {
             return Ok(None);
         }
         self.accept_one_or_more_whitespace()?;
+        let start = self.span_at_current_pos();
         self.accept("darktable:num=\"")?;
         let num = self.accept_until_char('"');
         let num = num
@@ -105,7 +108,8 @@ impl ParserHelper<'_> {
         };
 
         // Fields seem to forbid /> and the like so this is probably safe
-        self.advance_beyond(r"/>")
+        let end = self
+            .advance_beyond(r"/>")
             .map_err(ParseFieldError::CouldNotFindFieldEnd)?;
         self.accept_one_or_more_whitespace()?;
 
@@ -113,7 +117,15 @@ impl ParserHelper<'_> {
             num,
             operation,
             enabled,
+            hash: self.hash(start..end),
         }))
+    }
+
+    pub(crate) fn hash(&self, range: std::ops::Range<SourceSpan>) -> u64 {
+        let edit_text = &self.input[range.start.offset()..range.end.offset()];
+        let mut hasher = DefaultHasher::new();
+        edit_text.hash(&mut hasher);
+        hasher.finish()
     }
 }
 
@@ -170,69 +182,84 @@ mod tests {
 
     #[test]
     fn non_empty() -> miette::Result<()> {
+        use Render::*;
+        use PostProcess::*;
+
         let xmp = include_str!("../../tests/assets/small_raw.NEF.xmp");
         assert_eq!(
             parse_edits(xmp)?,
             vec![
                 Edit {
                     num: 0,
-                    operation: Operation::Render(Render::RawPrepare),
-                    enabled: true
+                    operation: Operation::Render(RawPrepare),
+                    enabled: true,
+                    hash: 11006611376185176428
                 },
                 Edit {
                     num: 1,
-                    operation: Operation::Render(Render::Demosaic),
-                    enabled: true
+                    operation: Operation::Render(Demosaic),
+                    enabled: true,
+                    hash: 5898785988624095154
                 },
                 Edit {
                     num: 2,
-                    operation: Operation::Render(Render::ColorIn),
-                    enabled: true
+                    operation: Operation::Render(ColorIn),
+                    enabled: true,
+                    hash: 2212034700558132485
                 },
                 Edit {
                     num: 3,
-                    operation: Operation::Render(Render::ColorOut),
-                    enabled: true
+                    operation: Operation::Render(ColorOut),
+                    enabled: true,
+                    hash: 6755857187102319893
                 },
                 Edit {
                     num: 4,
-                    operation: Operation::Render(Render::Gamma),
-                    enabled: true
+                    operation: Operation::Render(Gamma),
+                    enabled: true,
+                    hash: 4095472566387997674
                 },
                 Edit {
                     num: 5,
-                    operation: Operation::PostProcess(PostProcess::Temperature),
-                    enabled: true
+                    operation: Operation::PostProcess(Temperature),
+                    enabled: true,
+                    hash: 18301230132671716235
                 },
                 Edit {
                     num: 6,
-                    operation: Operation::PostProcess(PostProcess::Highlights),
-                    enabled: true
+                    operation: Operation::PostProcess(Highlights),
+                    enabled: true,
+                    hash: 6091024285588825961
                 },
                 Edit {
                     num: 7,
-                    operation: Operation::PostProcess(PostProcess::Agx),
-                    enabled: true
+                    operation: Operation::PostProcess(Agx),
+                    enabled: true,
+                    hash: 5419273352085062930
                 },
                 Edit {
                     num: 8,
-                    operation: Operation::Render(Render::ChannelMixerRGB),
-                    enabled: true
+                    operation: Operation::Render(ChannelMixerRGB),
+                    enabled: true,
+                    hash: 14425096563900339426
                 },
                 Edit {
                     num: 9,
-                    operation: Operation::PostProcess(PostProcess::Exposure),
-                    enabled: true
+                    operation: Operation::PostProcess(Exposure),
+                    enabled: true,
+                    hash: 2615864803797558207
                 },
                 Edit {
                     num: 10,
-                    operation: Operation::Render(Render::Flip),
-                    enabled: true
+                    operation: Operation::Render(Flip),
+                    enabled: true,
+                    hash: 4563662528553371068
                 },
                 Edit {
                     num: 11,
-                    operation: Operation::PostProcess(PostProcess::LenseCorrection),
-                    enabled: true
+                    operation: Operation::PostProcess(LenseCorrection),
+                    enabled: true,
+                    hash: 4635566713411306703
                 }
             ]
         );

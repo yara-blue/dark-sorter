@@ -173,7 +173,11 @@ impl<'a> ParserHelper<'a> {
         }
     }
 
-    pub(crate) fn advance_beyond(&mut self, required: &str) -> Result<(), AdvanceBeyondError> {
+    /// Returns span at the start of required
+    pub(crate) fn advance_beyond(
+        &mut self,
+        required: &str,
+    ) -> Result<SourceSpan, AdvanceBeyondError> {
         let Some(start) = self.leftover().find(required) else {
             return Err(AdvanceBeyondError {
                 required: required.to_string(),
@@ -182,6 +186,6 @@ impl<'a> ParserHelper<'a> {
         };
 
         self.byte_pos += start + required.len();
-        Ok(())
+        Ok((self.byte_pos - required.len()..self.byte_pos).into())
     }
 }

@@ -116,7 +116,9 @@ impl Xmp {
 
     pub fn edit_hash(&self) -> Option<EditHash> {
         let mut hasher = DefaultHasher::new();
-        self.edits.hash(&mut hasher);
+        for edits::Edit { hash, .. } in &self.edits {
+            hash.hash(&mut hasher);
+        }
         Some(EditHash(hasher.finish()))
     }
 
