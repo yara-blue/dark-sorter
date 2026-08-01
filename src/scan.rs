@@ -87,9 +87,8 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
         .ignore_err_if(|e| e.kind() == ErrorKind::AlreadyExists, ())
         .wrap_err("Could not create missing target dir(s)")
         .note_path(&target_dir)?;
-    std::os::unix::fs::chown(&target_dir, Some(fs.user), Some(fs.group))
-        .wrap_err("Could not set owner and user for missing target dir")
-        .note_path(&target_dir)?;
+    fs.take_ownership(&target_dir)
+        .wrap_err("Could not set owner and user for missing target dir")?;
 
     let read_target = fs
         .read_dir(&target_dir)

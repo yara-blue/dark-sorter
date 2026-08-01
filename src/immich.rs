@@ -219,7 +219,7 @@ async fn maintain_immich_sync(
                 }
             }
             Event::ModifiedOrAdded(preview_file) => {
-                let dir = preview_file.parent_dir();
+                let dir = preview_file.dir();
                 let lib = if let Some(lib) = libs.get_mut(&dir) {
                     lib
                 } else {

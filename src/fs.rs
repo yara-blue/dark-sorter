@@ -1,6 +1,8 @@
 use std::ffi::OsStr;
 use std::fmt::Display;
+use std::fs::Permissions;
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -11,7 +13,6 @@ use std::fs::Metadata;
 use tokio::fs::DirEntry;
 use tokio::io;
 use tokio::sync::Semaphore;
-use tracing::debug;
 
 use crate::watcher::EyreWithPath;
 
@@ -58,20 +59,6 @@ impl ThrottledFs {
         tokio::fs::metadata(path).await
     }
 
-    pub async fn symlink(
-        &self,
-        original: impl AsRef<Path>,
-        link: impl AsRef<Path>,
-    ) -> io::Result<()> {
-        debug!(
-            "Creating symlink: {} -> {}",
-            link.as_ref().display(),
-            original.as_ref().display()
-        );
-        tokio::fs::symlink(original, &link).await?;
-        std::os::unix::fs::lchown(link, Some(self.user), Some(self.group))
-    }
-
     pub async fn copy_file(
         &self,
         raw: &RawFile,
@@ -82,9 +69,26 @@ impl ThrottledFs {
             .wrap_err("Failed to copy jpg source to target dir")
             .note_path(raw)
             .note_path(preview)?;
-        std::os::unix::fs::chown(preview, Some(self.user), Some(self.group))
-            .wrap_err("Could not set permissions for copied preview file")
-            .note_path(preview)
+        self.take_ownership(preview)
+    }
+
+    pub fn take_ownership(&self, path: impl AsRef<Path>) -> color_eyre::Result<()> {
+        std::os::unix::fs::chown(&path, Some(self.user), Some(self.group))
+            .wrap_err("Could not change ownership to our user and group")
+            .note_path(path)
+    }
+
+    pub async fn allow_anyone_read_owner_write(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> color_eyre::Result<()> {
+        tokio::fs::set_permissions(&path, Permissions::from_mode(0o644))
+            .await
+            .wrap_err(
+                "failed to set permissions to allow anyone to \
+                read and the owner to also write",
+            )
+            .note_path(path)
     }
 }
 
@@ -188,7 +192,6 @@ impl TargetDir {
     pub fn subdir(&self, dir: &DirName) -> Self {
         Self(self.0.subdir(dir))
     }
-
     pub fn try_new(path: impl AsRef<Path>, base: &BaseTargetDir) -> Result<Self, NotBaseSubDir> {
         let path = path.as_ref();
         if path.starts_with(base) {
@@ -283,7 +286,8 @@ impl PreviewFile {
                 .with_added_extension("xmp"),
         )
     }
-    pub fn parent_dir(&self) -> TargetDir {
+    /// The dir the preview file is in
+    pub fn dir(&self) -> TargetDir {
         TargetDir(Dir(self
             .0
             .parent()

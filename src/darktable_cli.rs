@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use color_eyre::Section;
 use color_eyre::eyre::{Context, OptionExt, eyre};
+use tempfile::NamedTempFile;
 use tokio::process;
 use tokio::sync::Semaphore;
 use tracing::debug;
@@ -46,12 +47,14 @@ pub async fn export(
     debug!("Exporting image: {input_file}");
     asses_file_state(input_file, output_file, fs).await?;
 
+    let tmp_file = NamedTempFile::with_suffix_in("_preview.part.jpg", output_file.dir())
+        .wrap_err("Failed to open temporary file to write preview to")?;
     let output = process::Command::new("nice")
         .arg("--adjustment=19")
         .arg("darktable-cli")
         .arg(input_file)
         .arg(xmp_file)
-        .arg(output_file)
+        .arg(tmp_file.path())
         .arg("--core")
         .arg("--library")
         .arg(":memory:") // don't create a darktable library file
@@ -67,7 +70,11 @@ pub async fn export(
         .wrap_err("Could not spawn darktable-cli export process")?;
 
     if output.status.success() {
-        Ok(())
+        tmp_file
+            .persist(output_file)
+            .wrap_err("failed to move generated preview into place")?;
+        fs.take_ownership(output_file)?;
+        fs.allow_anyone_read_owner_write(output_file).await
     } else {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -107,18 +114,18 @@ async fn asses_file_state(
     }
 
     if let Some(output_dir) = fs
-        .metadata(output_file.parent_dir())
+        .metadata(output_file.dir())
         .await
         .map(Some)
         .ignore_err_if(|e| e.kind() == ErrorKind::NotFound, None)
         .wrap_err("Could not check for existing output dir")
-        .note_path(output_file.parent_dir())?
+        .note_path(output_file.dir())?
         && !output_dir.user_can_write(fs.user)
     {
         return Err(eyre!(
             "The darktable-cli user has no permissions to write to the parent directory"
         ))
-        .note_path(output_file.parent_dir())
+        .note_path(output_file.dir())
         .suggestion("Manually change the permissions or ownership");
     }
 
@@ -160,8 +167,7 @@ fn darktable_home(fs: &ThrottledFs) -> color_eyre::Result<PathBuf> {
         .wrap_err("Could not setup dir for darktable 'home'")
         .with_note(|| format!("database dir: {}", dir.display()))?;
 
-    std::os::unix::fs::chown(&dir, Some(fs.user), Some(fs.group))
-        .wrap_err("Failed to set user and group for darktable 'home' dir")
-        .note_path(&dir)?;
+    fs.take_ownership(&dir)
+        .wrap_err("Failed to set user and group for darktable 'home' dir")?;
     Ok(dir)
 }

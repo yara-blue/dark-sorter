@@ -167,7 +167,7 @@ pub async fn handle_event<Exporter: ImageExporter>(
         return Ok(());
     };
     let preview = xmp_file.preview_path(base_source, base_target);
-    let target = preview.parent_dir();
+    let target = preview.dir();
     let source = xmp_file.parent_dir();
     trace!("xmp for event: {xmp:?}");
 
