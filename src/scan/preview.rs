@@ -17,7 +17,7 @@ use crate::{ImageExporter, database, xmp};
 /// - the symlink does not point to a jpg
 /// - the corresponding xmp does not exist
 /// - the corresponding xmp does not have a rating for the image
-#[instrument(skip(source_dir, fs))]
+#[instrument(skip_all, fields(preview, source_dir))]
 pub async fn should_remove(
     preview: &PreviewFile,
     source_dir: &SourceDir,

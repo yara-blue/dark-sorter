@@ -202,7 +202,7 @@ impl Immich {
         Ok(this)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     pub(super) async fn get_all_libraries(&self) -> color_eyre::Result<Vec<Library>> {
         let get_all_libraries = async || self.http_request(Method::GET, "libraries").await;
         retry(get_all_libraries)
@@ -210,7 +210,7 @@ impl Immich {
             .wrap_err("Could not get all libraries")
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all, fields(id))]
     pub(super) async fn update_library(&self, id: &ExternalLibraryId) -> color_eyre::Result<()> {
         debug!("triggering immich sync for library");
         let update_library = async || {
@@ -250,7 +250,7 @@ impl Immich {
             .wrap_err("Could not create library")
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all, fields(id))]
     pub(crate) async fn delete_library(&self, id: &ExternalLibraryId) -> color_eyre::Result<()> {
         debug!("deleting immich library");
         let delete_library = async || {

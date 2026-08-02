@@ -42,7 +42,7 @@ pub async fn scan_clean_and_link<Exporter: ImageExporter>(
     .await
 }
 
-#[tracing::instrument(skip(fs, previously_exported, immich))]
+#[tracing::instrument(skip_all, fields(source_dir, target_dir))]
 async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
     source_dir: SourceDir,
     target_dir: TargetDir,

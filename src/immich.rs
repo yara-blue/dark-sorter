@@ -65,7 +65,7 @@ impl ImmichSync {
         warn!("Immich sync overflown, dropped some events. Will rescan when it catches up")
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all, fields(dir))]
     pub fn signal_dir_empty(&self, dir: TargetDir) {
         debug!("ImmichSync: marking dir as empty");
         match self.tx.try_send(Event::EmptyDir(dir)) {
@@ -75,7 +75,7 @@ impl ImmichSync {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all, fields(file))]
     pub fn signal_file_modified_or_added(&self, file: PreviewFile) {
         debug!("ImmichSync: marking dir as not empty");
         match self.tx.try_send(Event::ModifiedOrAdded(file)) {
@@ -258,7 +258,7 @@ async fn maintain_immich_sync(
     Ok(ImmichHandleDropped)
 }
 
-#[instrument]
+#[instrument(skip_all, fields(dir, base_dir))]
 async fn add_managed_library(
     dir: TargetDir,
     base_dir: &BaseTargetDir,

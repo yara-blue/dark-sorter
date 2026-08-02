@@ -43,7 +43,7 @@ pub(crate) enum XmpState {
 }
 
 impl ParsedXmps {
-    #[tracing::instrument(skip(self, fs))]
+    #[tracing::instrument(skip_all, fields(path))]
     pub(crate) async fn get_cached_or_read_from_file(
         &self,
         path: &XmpFile,
