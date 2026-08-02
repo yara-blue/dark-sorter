@@ -1,5 +1,7 @@
+use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use color_eyre::Section;
 use color_eyre::eyre::{Context, OptionExt, eyre};
@@ -13,6 +15,7 @@ use crate::watcher::{EyreWithPath, ResultExt};
 use crate::{ImageExporter, ThrottledFs};
 
 pub struct DarktableCli;
+const MAX_PARALLEL_EXPORTS: usize = 2;
 
 impl ImageExporter for DarktableCli {
     fn export(
@@ -37,7 +40,7 @@ pub async fn export(
     fs: &ThrottledFs,
 ) -> color_eyre::Result<()> {
     // darktable export is already highly parallel
-    static LIMIT_EXPORTS: Semaphore = Semaphore::const_new(1);
+    static LIMIT_EXPORTS: Semaphore = Semaphore::const_new(MAX_PARALLEL_EXPORTS);
 
     let _permit = LIMIT_EXPORTS
         .acquire()
@@ -47,6 +50,7 @@ pub async fn export(
     debug!("Exporting image: {input_file}");
     asses_file_state(input_file, output_file, fs).await?;
 
+    let darktable_home = darktable_home(fs)?;
     let tmp_file = NamedTempFile::with_suffix_in("_preview.part.jpg", output_file.dir())
         .wrap_err("Failed to open temporary file to write preview to")?;
     let output = process::Command::new("nice")
@@ -62,7 +66,7 @@ pub async fn export(
         .arg("plugins/lighttable/export/metadata_flags=1")
         // can't stop darktable from getting configs give it a place to put them
         // it derives it's paths from home so we gotta give it one.
-        .env("HOME", &darktable_home(fs)?)
+        .env("HOME", &darktable_home)
         .uid(fs.user)
         .gid(fs.group)
         .output()
@@ -153,7 +157,38 @@ async fn asses_file_state(
     Ok(())
 }
 
-fn darktable_home(fs: &ThrottledFs) -> color_eyre::Result<PathBuf> {
+static HOMES: [Mutex<Option<PathBuf>>; MAX_PARALLEL_EXPORTS] = [Mutex::new(None), Mutex::new(None)];
+
+struct DarkTableHome(PathBuf);
+
+impl AsRef<OsStr> for DarkTableHome {
+    fn as_ref(&self) -> &OsStr {
+        self.0.as_os_str()
+    }
+}
+
+impl Drop for DarkTableHome {
+    fn drop(&mut self) {
+        let mut empty_slot = HOMES
+            .iter()
+            .map(|h| h.lock().unwrap())
+            .find(|h| h.is_none())
+            .expect("there was an empty slot before exporting");
+
+        *empty_slot = Some(self.0.clone());
+    }
+}
+
+fn darktable_home(fs: &ThrottledFs) -> color_eyre::Result<DarkTableHome> {
+    let mut home = HOMES
+        .iter()
+        .find_map(|h| h.try_lock().ok())
+        .expect("we create the same number of homes as semaphores");
+
+    if let Some(home) = home.take() {
+        return Ok(DarkTableHome(home));
+    }
+
     let dir = if crate::running_as_root() {
         Path::new("/var/cache").to_path_buf()
     } else {
@@ -169,5 +204,5 @@ fn darktable_home(fs: &ThrottledFs) -> color_eyre::Result<PathBuf> {
 
     fs.take_ownership(&dir)
         .wrap_err("Failed to set user and group for darktable 'home' dir")?;
-    Ok(dir)
+    Ok(DarkTableHome(dir))
 }
