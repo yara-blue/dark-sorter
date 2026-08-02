@@ -8,7 +8,7 @@ use tempfile::TempDir;
 use tokio::sync::{Notify, mpsc};
 use tracing::info;
 
-use crate::fs::{Dir, DirName, PreviewFile, RawFile, SourceDir, TargetDir, XmpFile};
+use crate::fs::{Dir, DirName, InputFile, PreviewFile, SourceDir, TargetDir, XmpFile};
 use crate::watcher::EyreWithPath;
 use crate::xmp::Rating;
 use crate::{BaseSourceDir, BaseTargetDir, ImageExporter, Watcher};
@@ -19,19 +19,39 @@ pub use crate::watcher;
 pub fn test_subdir() -> DirName {
     DirName(OsStr::new("some_event/some_day").to_owned())
 }
-const PREVIEW_JPEG_CONTENT: &str = "this is totally a preview jpg of a rated raw /s.";
-const RATED_RAW_CONTENT: &str = "this is a raw photo that is rated, I swear! /s.";
-const UNRATED_RAW_CONTENT: &str = "this is a raw photo that is not rated, I swear! /s.";
+const FAKE_JPEG_CONTENT: &str = "this is totally a jpg";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TestFile {
+    /// A raw NEF file
     A,
+    /// A jpg with the normal extension
+    B,
+    /// A jpg with the extension all caps JPG
+    C,
 }
 
 impl TestFile {
-    const fn name(self) -> &'static str {
+    const fn content(&self) -> &'static str {
+        match self {
+            TestFile::A => "this is a raw photo that is rated, I swear! /s.",
+            TestFile::B | TestFile::C => FAKE_JPEG_CONTENT,
+        }
+    }
+
+    const fn extension(&self) -> &'static str {
+        match self {
+            TestFile::A => "NEF",
+            TestFile::B => "jpg",
+            TestFile::C => "JPG",
+        }
+    }
+
+    const fn name(&self) -> &'static str {
         match self {
             TestFile::A => "a",
+            TestFile::B => "b",
+            TestFile::C => "c",
         }
     }
     pub fn xmp_file(self, source: impl AsRef<SourceDir>) -> XmpFile {
@@ -41,7 +61,7 @@ impl TestFile {
                 .0
                 .0
                 .join(self.name())
-                .with_added_extension("NEF")
+                .with_added_extension(self.extension())
                 .with_added_extension("xmp"),
         )
     }
@@ -115,7 +135,7 @@ impl TargetDirBuilder {
         fs::create_dir_all(&target).unwrap();
 
         for test_file in self.preview {
-            fs::write(test_file.jpg_preview(&target), PREVIEW_JPEG_CONTENT).unwrap();
+            fs::write(test_file.jpg_preview(&target), FAKE_JPEG_CONTENT).unwrap();
         }
 
         (dir, base_target)
@@ -126,9 +146,9 @@ impl TargetDirBuilder {
 pub fn assert_preview_in_place(target: &BaseTargetDir, test_file: TestFile) {
     let target = target.subdir(&test_subdir());
     let file = test_file.jpg_preview(target.as_ref());
-    assert!(&file.0.is_file());
+    assert!(&file.0.is_file(), "No preview found at: {file:?}");
     let content = fs::read_to_string(file).unwrap();
-    assert_eq!(content, PREVIEW_JPEG_CONTENT);
+    assert_eq!(content, FAKE_JPEG_CONTENT);
 }
 
 #[track_caller]
@@ -150,18 +170,15 @@ pub fn add_file(file: TestFile, rating: Rating, source: impl AsRef<SourceDir>) {
     info!("adding test file: {file:?}, with rating: {rating:?}");
     std::fs::write(
         // needs to match xmp file content
-        file.xmp_file(&source).raw_file(),
-        if rating.is_rated() {
-            RATED_RAW_CONTENT
-        } else {
-            UNRATED_RAW_CONTENT
-        },
+        file.xmp_file(&source).input_file(),
+        file.content(),
     )
     .unwrap();
     std::fs::write(
         file.xmp_file(source),
         include_str!("../tests/assets/small_raw.NEF.xmp")
             .replace("<FILENAME>", file.name())
+            .replace("<EXTENSION>", file.extension())
             .replace("<RATING>", &dbg!(dbg!(rating).number()).to_string()),
     )
     .unwrap();
@@ -169,7 +186,7 @@ pub fn add_file(file: TestFile, rating: Rating, source: impl AsRef<SourceDir>) {
 
 pub fn remove_file(file: TestFile, source: impl AsRef<SourceDir>) {
     std::fs::remove_file(file.xmp_file(&source)).unwrap();
-    std::fs::remove_file(file.xmp_file(&source).raw_file()).unwrap();
+    std::fs::remove_file(file.xmp_file(&source).input_file()).unwrap();
 }
 
 /// Puts a file ending in `.jpg` next to the raw file.
@@ -178,11 +195,16 @@ pub struct TestExporter;
 impl ImageExporter for TestExporter {
     async fn export(
         _: &XmpFile,
-        _: &RawFile,
+        raw: &InputFile,
         output_file: &PreviewFile,
         fs: &crate::fs::ThrottledFs,
     ) -> color_eyre::Result<()> {
-        std::fs::write(output_file, PREVIEW_JPEG_CONTENT)
+        // Tests only use NEF files to represent raws.
+        assert!(
+            raw.0.extension() == Some(OsStr::new("NEF")),
+            "Exporter should only get raw files"
+        );
+        std::fs::write(output_file, FAKE_JPEG_CONTENT)
             .wrap_err("Failed to write fake jpeg")
             .note_path(output_file)?;
         std::os::unix::fs::chown(output_file, Some(fs.user), Some(fs.group))

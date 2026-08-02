@@ -139,7 +139,7 @@ async fn main() -> color_eyre::Result<()> {
         None
     };
 
-    dark_sorter::main_loop::<DarktableCli>(
+    dark_sorter::main_loop::<DarktableCli, _>(
         cli.source_dir,
         cli.target_dir,
         fs,

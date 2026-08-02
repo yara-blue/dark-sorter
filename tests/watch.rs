@@ -24,7 +24,7 @@ async fn remove_rating() {
     let db = dark_sorter::Db::default();
     let fs = dark_sorter::ThrottledFs::for_testing().unwrap();
     tokio::spawn(
-        dark_sorter::main_loop::<TestExporter>(
+        dark_sorter::main_loop::<TestExporter, _>(
             source.clone(),
             target.clone(),
             fs,
@@ -59,7 +59,7 @@ async fn adding_rating() {
     let db = dark_sorter::Db::default();
     let fs = dark_sorter::ThrottledFs::for_testing().unwrap();
     tokio::spawn(
-        dark_sorter::main_loop::<TestExporter>(
+        dark_sorter::main_loop::<TestExporter, _>(
             source.clone(),
             target.clone(),
             fs,
@@ -98,7 +98,7 @@ async fn queued_add_remove() {
     let db = dark_sorter::Db::default();
     let fs = dark_sorter::ThrottledFs::for_testing().unwrap();
     tokio::spawn(
-        dark_sorter::main_loop::<TestExporter>(
+        dark_sorter::main_loop::<TestExporter, _>(
             source.clone(),
             target.clone(),
             fs,

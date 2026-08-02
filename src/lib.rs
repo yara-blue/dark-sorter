@@ -20,14 +20,14 @@ pub use fs::{BaseSourceDir, BaseTargetDir, ThrottledFs};
 pub use scan::scan_clean_and_link;
 use tracing::{info, warn};
 
-use crate::fs::{PreviewFile, RawFile, XmpFile};
+use crate::fs::{PreviewFile, InputFile, XmpFile};
 use crate::immich::ImmichSync;
 
 /// Only here so we can test without having to run darktable
 pub trait ImageExporter: 'static {
     fn export(
         xmp_file: &XmpFile,
-        input_file: &RawFile,
+        input_file: &InputFile,
         output_file: &PreviewFile,
         fs: &fs::ThrottledFs,
     ) -> impl Future<Output = color_eyre::Result<()>> + Send;
@@ -50,13 +50,13 @@ pub fn running_as_root() -> bool {
     .expect("We should always be able to see if we are sys admin")
 }
 
-pub async fn main_loop<Exporter: ImageExporter>(
+pub async fn main_loop<Exporter: ImageExporter, W: Watcher>(
     source: BaseSourceDir,
     target: BaseTargetDir,
     fs: ThrottledFs,
     db: Db,
     immich_sync: Option<ImmichSync>,
-    mut watcher: Option<impl Watcher>,
+    mut watcher: Option<W>,
 ) -> color_eyre::Result<()> {
     let mut first_scan = true;
     loop {

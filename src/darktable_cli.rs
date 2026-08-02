@@ -5,12 +5,11 @@ use std::sync::Mutex;
 
 use color_eyre::Section;
 use color_eyre::eyre::{Context, OptionExt, eyre};
-use tempfile::NamedTempFile;
 use tokio::process;
 use tokio::sync::Semaphore;
 use tracing::debug;
 
-use crate::fs::{MetadataExtExt, PreviewFile, RawFile, XmpFile};
+use crate::fs::{InputFile, MetadataExtExt, PreviewFile, XmpFile};
 use crate::watcher::{EyreWithPath, ResultExt};
 use crate::{ImageExporter, ThrottledFs};
 
@@ -20,7 +19,7 @@ const MAX_PARALLEL_EXPORTS: usize = 2;
 impl ImageExporter for DarktableCli {
     fn export(
         xmp_file: &XmpFile,
-        input_file: &RawFile,
+        input_file: &InputFile,
         output_file: &PreviewFile,
         fs: &ThrottledFs,
     ) -> impl Future<Output = color_eyre::Result<()>> + Send {
@@ -35,7 +34,7 @@ struct StringError(String);
 /// Globally limit to one file at the time
 pub async fn export(
     xmp_file: &XmpFile,
-    input_file: &RawFile,
+    input_file: &InputFile,
     output_file: &PreviewFile,
     fs: &ThrottledFs,
 ) -> color_eyre::Result<()> {
@@ -51,14 +50,17 @@ pub async fn export(
     asses_file_state(input_file, output_file, fs).await?;
 
     let darktable_home = darktable_home(fs)?;
-    let tmp_file = NamedTempFile::with_suffix_in("_preview.part.jpg", output_file.dir())
-        .wrap_err("Failed to open temporary file to write preview to")?;
+    tokio::fs::remove_file(output_file)
+        .await
+        .ignore_err_if(|e| e.kind() == ErrorKind::NotFound, ())
+        .wrap_err("Could not remove exiting output file")
+        .note_path(output_file)?;
     let output = process::Command::new("nice")
         .arg("--adjustment=19")
         .arg("darktable-cli")
         .arg(input_file)
         .arg(xmp_file)
-        .arg(tmp_file.path())
+        .arg(output_file)
         .arg("--core")
         .arg("--library")
         .arg(":memory:") // don't create a darktable library file
@@ -74,9 +76,6 @@ pub async fn export(
         .wrap_err("Could not spawn darktable-cli export process")?;
 
     if output.status.success() {
-        tmp_file
-            .persist(output_file)
-            .wrap_err("failed to move generated preview into place")?;
         fs.take_ownership(output_file)?;
         fs.allow_anyone_read_owner_write(output_file).await
     } else {
@@ -94,7 +93,7 @@ pub async fn export(
 /// Darktable-cli's errors are not super helpful when im eepy. Let's give future
 /// me some nice errors instead.
 async fn asses_file_state(
-    input_file: &RawFile,
+    input_file: &InputFile,
     output_file: &PreviewFile,
     fs: &ThrottledFs,
 ) -> color_eyre::Result<()> {
@@ -180,9 +179,10 @@ impl Drop for DarkTableHome {
 }
 
 fn darktable_home(fs: &ThrottledFs) -> color_eyre::Result<DarkTableHome> {
-    let mut home = HOMES
+    let (idx, mut home) = HOMES
         .iter()
-        .find_map(|h| h.try_lock().ok())
+        .enumerate()
+        .find_map(|(idx, h)| h.try_lock().ok().map(|h| (idx, h)))
         .expect("we create the same number of homes as semaphores");
 
     if let Some(home) = home.take() {
@@ -196,7 +196,7 @@ fn darktable_home(fs: &ThrottledFs) -> color_eyre::Result<DarkTableHome> {
         dirs::cache_dir().ok_or_eyre("Could not get user cache dir")?
     }
     .join(env!("CARGO_PKG_NAME"))
-    .join("darktable_cache");
+    .join(format!("darktable_cache_{idx}"));
 
     std::fs::create_dir_all(&dir)
         .wrap_err("Could not setup dir for darktable 'home'")

@@ -144,7 +144,7 @@ impl Watcher for FanotifyWatcher {
     }
 }
 
-#[instrument(skip_all, fields(event, base_target, base_target))]
+#[instrument(skip_all, fields(event=?event, base_source=?base_source, base_target=?base_target))]
 pub async fn handle_event<Exporter: ImageExporter>(
     event: Event,
     base_source: &BaseSourceDir,

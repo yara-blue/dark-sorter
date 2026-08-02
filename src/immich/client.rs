@@ -210,7 +210,7 @@ impl Immich {
             .wrap_err("Could not get all libraries")
     }
 
-    #[instrument(skip_all, fields(id))]
+    #[instrument(skip_all, fields(id=?id))]
     pub(super) async fn update_library(&self, id: &ExternalLibraryId) -> color_eyre::Result<()> {
         debug!("triggering immich sync for library");
         let update_library = async || {
@@ -222,7 +222,7 @@ impl Immich {
             .wrap_err("Could not update library")
     }
 
-    #[instrument(skip_all, fields(name = name, path = ?path.as_ref().display()))]
+    #[instrument(skip_all, fields(name=name, path=?path.as_ref()))]
     pub(super) async fn create_library(
         &self,
         exclusion_patterns: Vec<String>,
@@ -250,7 +250,7 @@ impl Immich {
             .wrap_err("Could not create library")
     }
 
-    #[instrument(skip_all, fields(id))]
+    #[instrument(skip_all, fields(id=?id))]
     pub(crate) async fn delete_library(&self, id: &ExternalLibraryId) -> color_eyre::Result<()> {
         debug!("deleting immich library");
         let delete_library = async || {
@@ -273,7 +273,7 @@ impl Immich {
         retry(search).await.wrap_err("Could not search for asset")
     }
 
-    #[instrument(skip_all, fields(method=%method, url))]
+    #[instrument(skip_all, fields(method=%method, url=url))]
     async fn http_request<T: IsUnitOrDeserialize>(
         &self,
         method: Method,
@@ -282,7 +282,7 @@ impl Immich {
         self.http_request_inner(method, url, None::<&()>).await
     }
 
-    #[instrument(skip_all, fields(method=%method, url))]
+    #[instrument(skip_all, fields(method=%method, url=url))]
     async fn http_request_with_body<B: Serialize, T: IsUnitOrDeserialize>(
         &self,
         method: Method,
@@ -292,7 +292,7 @@ impl Immich {
         self.http_request_inner(method, url, Some(body)).await
     }
 
-    #[instrument(skip_all, fields(method=%method, url))]
+    #[instrument(skip_all, fields(method=%method, url=url))]
     async fn http_request_inner<B: Serialize, RB: IsUnitOrDeserialize>(
         &self,
         method: Method,

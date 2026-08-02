@@ -61,7 +61,7 @@ impl ThrottledFs {
 
     pub async fn copy_file(
         &self,
-        raw: &RawFile,
+        raw: &InputFile,
         preview: &PreviewFile,
     ) -> Result<(), color_eyre::eyre::Error> {
         tokio::fs::copy(raw, preview)
@@ -249,7 +249,7 @@ macro_rules! path_wrapper {
     };
 }
 
-path_wrapper! {RawFile}
+path_wrapper! {InputFile}
 path_wrapper! {PreviewFile}
 path_wrapper! {XmpFile}
 path_wrapper! {
@@ -260,12 +260,6 @@ path_wrapper! {
 impl Dir {
     pub fn subdir(&self, dir: &DirName) -> Self {
         Self(self.0.join(dir))
-    }
-}
-
-impl RawFile {
-    pub fn preview_file(&self) -> PreviewFile {
-        PreviewFile(self.0.with_extension("jpg"))
     }
 }
 
@@ -293,6 +287,12 @@ impl PreviewFile {
             .parent()
             .expect("a preview is always in a target dir")
             .to_path_buf()))
+    }
+    pub async fn exists(&self) -> bool {
+        tokio::fs::metadata(&self.0)
+            .await
+            .map(|meta| meta.is_file())
+            .unwrap_or(false)
     }
 }
 
@@ -330,6 +330,19 @@ impl TryFrom<DirEntry> for XmpFile {
     }
 }
 
+impl InputFile {
+    pub fn needs_no_export(&self) -> bool {
+        const NOT_NEEDING_EXPORT: [&'static str; 4] = ["jpeg", "jpg", "gif", "png"];
+        let ext = self
+            .0
+            .extension()
+            .expect("the raw listed in the xmp always has an extension");
+        NOT_NEEDING_EXPORT
+            .iter()
+            .any(|e| OsStr::new(e).eq_ignore_ascii_case(ext))
+    }
+}
+
 impl XmpFile {
     pub fn preview_path(&self, source: &BaseSourceDir, target: &BaseTargetDir) -> PreviewFile {
         let relative = self
@@ -341,8 +354,8 @@ impl XmpFile {
         PreviewFile(jpg)
     }
 
-    pub fn raw_file(&self) -> RawFile {
-        RawFile(self.0.with_extension(""))
+    pub fn input_file(&self) -> InputFile {
+        InputFile(self.0.with_extension(""))
     }
 
     /// Includes the extension

@@ -1,4 +1,3 @@
-use std::ffi::OsStr;
 pub(crate) use std::future;
 use std::io::ErrorKind;
 
@@ -7,7 +6,7 @@ use futures::TryStreamExt;
 use futures::stream::FuturesUnordered;
 use tracing::{debug, instrument};
 
-use crate::fs::{PreviewFile, RawFile, SourceDir, TargetDir, ThrottledFs, XmpFile};
+use crate::fs::{PreviewFile, SourceDir, TargetDir, ThrottledFs, XmpFile};
 use crate::watcher::{EyreWithPath, ResultExt};
 use crate::xmp::{EditHash, ParsedXmps, Xmp};
 use crate::{ImageExporter, database, xmp};
@@ -17,7 +16,7 @@ use crate::{ImageExporter, database, xmp};
 /// - the symlink does not point to a jpg
 /// - the corresponding xmp does not exist
 /// - the corresponding xmp does not have a rating for the image
-#[instrument(skip_all, fields(preview, source_dir))]
+#[instrument(skip_all, fields(preview=?preview, source_dir=?source_dir))]
 pub async fn should_remove(
     preview: &PreviewFile,
     source_dir: &SourceDir,
@@ -125,49 +124,43 @@ pub(crate) async fn create_update_or_clean_one<Exporter: ImageExporter>(
     fs: &ThrottledFs,
     previously_exported: &database::Db,
 ) -> color_eyre::Result<Change> {
-    let raw = xmp.raw_file(&source);
+    let raw = xmp.input_file(&source);
     let preview = xmp.preview_file(&target);
-    if let Some(current_edits) = xmp.edit_hash()
-        && let Some(exported_edits) = previously_exported.get(&xmp_file)
-        && current_edits != exported_edits
-        && xmp.rated()
-    {
-        export_or_move::<Exporter>(&xmp_file, &raw, &preview, fs).await?;
-        previously_exported.insert(xmp_file.clone(), current_edits);
-        Ok(Change::Added(preview))
-    } else if xmp.rated() && xmp.preview_missing(target).await? {
-        export_or_move::<Exporter>(&xmp_file, &raw, &preview, fs).await?;
-        previously_exported.insert(
-            xmp_file.clone(),
-            xmp.edit_hash().unwrap_or(EditHash::NO_EDITS),
-        );
-        Ok(Change::Added(preview))
-    } else if xmp.rated() {
-        Ok(Change::None)
-    } else {
-        match std::fs::remove_file(&preview) {
+
+    if !xmp.rated() {
+        return match std::fs::remove_file(&preview) {
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(Change::None),
             Err(e) => Err(e)
                 .wrap_err("Could not remove preview jpg")
                 .note_path(&preview),
             Ok(()) => Ok(Change::Removed),
-        }
+        };
     }
-}
 
-async fn export_or_move<Exporter: ImageExporter>(
-    xmp_file: &XmpFile,
-    raw: &RawFile,
-    preview: &PreviewFile,
-    fs: &ThrottledFs,
-) -> color_eyre::Result<()> {
-    if raw.0.extension() == Some(OsStr::new("jpg")) {
-        fs.copy_file(raw, preview).await
-    } else {
-        Exporter::export(xmp_file, raw, preview, fs)
+    if let Some(current_edits) = xmp.edit_hash()
+        && let Some(exported_edits) = previously_exported.get(&xmp_file)
+        && current_edits == exported_edits
+        && preview.exists().await
+    {
+        return Ok(Change::None);
+    };
+
+    if raw.needs_no_export() {
+        tracing::info!("copying unedited non raw");
+        fs.copy_file(&raw, &preview)
             .await
-            .wrap_err("failed to create preview")
+            .wrap_err("Failed to copy over rated, unedited non raw file")?;
+    } else {
+        Exporter::export(&xmp_file, &raw, &preview, fs)
+            .await
+            .wrap_err("failed to create preview")?;
+        previously_exported.insert(
+            xmp_file.clone(),
+            xmp.edit_hash().unwrap_or(EditHash::NO_EDITS),
+        );
     }
+
+    Ok(Change::Added(preview))
 }
 
 #[instrument]

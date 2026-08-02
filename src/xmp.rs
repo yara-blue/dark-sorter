@@ -9,7 +9,7 @@ use std::sync::Arc;
 use color_eyre::eyre::Context;
 use tokio::sync::Notify;
 
-use crate::fs::{PreviewFile, RawFile, SourceDir, TargetDir, ThrottledFs, XmpFile};
+use crate::fs::{InputFile, PreviewFile, SourceDir, TargetDir, ThrottledFs, XmpFile};
 use crate::watcher::EyreWithPath;
 
 mod edits;
@@ -43,7 +43,7 @@ pub(crate) enum XmpState {
 }
 
 impl ParsedXmps {
-    #[tracing::instrument(skip_all, fields(path))]
+    #[tracing::instrument(skip_all, fields(path=?path))]
     pub(crate) async fn get_cached_or_read_from_file(
         &self,
         path: &XmpFile,
@@ -95,7 +95,7 @@ pub struct Xmp {
     pub(crate) rating: Rating,
     /// if the edits changed we need to re-export
     pub(crate) edits: Vec<edits::Edit>,
-    pub(crate) raw: Arc<str>,
+    pub(crate) input_file: Arc<str>,
 }
 
 impl Xmp {
@@ -111,7 +111,11 @@ impl Xmp {
             .map_err(XmpError::ParseEdits)?;
         let raw = parse_raw(&s)?;
 
-        Ok(Self { rating, edits, raw })
+        Ok(Self {
+            rating,
+            edits,
+            input_file: raw,
+        })
     }
 
     pub fn edit_hash(&self) -> Option<EditHash> {
@@ -123,11 +127,21 @@ impl Xmp {
     }
 
     pub fn preview_file(&self, target: &TargetDir) -> PreviewFile {
-        PreviewFile(target.0.0.join(&*self.raw).with_extension("jpg"))
+        let input_file = InputFile(Path::new(&*self.input_file).to_path_buf());
+        if input_file.needs_no_export() {
+            let extension = input_file
+                .0
+                .extension()
+                .expect("Xmp parser checked that the input file has an extension")
+                .to_ascii_lowercase();
+            PreviewFile(target.0.0.join(&*self.input_file).with_extension(extension))
+        } else {
+            PreviewFile(target.0.0.join(&*self.input_file).with_extension("jpg"))
+        }
     }
 
-    pub(crate) fn raw_file(&self, source: &SourceDir) -> RawFile {
-        RawFile(source.0.0.join(&*self.raw))
+    pub(crate) fn input_file(&self, source: &SourceDir) -> InputFile {
+        InputFile(source.0.0.join(&*self.input_file))
     }
 
     pub async fn preview_missing(&self, target: impl AsRef<TargetDir>) -> color_eyre::Result<bool> {

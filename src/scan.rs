@@ -42,7 +42,7 @@ pub async fn scan_clean_and_link<Exporter: ImageExporter>(
     .await
 }
 
-#[tracing::instrument(skip_all, fields(source_dir, target_dir))]
+#[tracing::instrument(skip_all, fields(source_dir = ?source_dir, target_dir = ?target_dir))]
 async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
     source_dir: SourceDir,
     target_dir: TargetDir,
@@ -52,7 +52,7 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
     parsed_xmps: ParsedXmps,
     immich: Option<ImmichSync>,
 ) -> color_eyre::Result<()> {
-    debug!("Scanning: {}", target_dir.display());
+    debug!("Scanning");
     let read_source = fs
         .read_dir(&source_dir)
         .await
@@ -160,7 +160,7 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
             immich.signal_file_modified_or_added(added);
         }
     }
-    debug!("Done scanning: {}", target_dir.display());
+    debug!("Done scanning");
     recursive_scans.await
 }
 
