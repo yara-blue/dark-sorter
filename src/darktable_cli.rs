@@ -2,6 +2,7 @@ use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use color_eyre::Section;
 use color_eyre::eyre::{Context, OptionExt, eyre};
@@ -66,6 +67,10 @@ pub async fn export(
         .arg(":memory:") // don't create a darktable library file
         .arg("--conf")
         .arg("plugins/lighttable/export/metadata_flags=1")
+        .arg("--configdir")
+        .arg(&darktable_home)
+        .arg("-d")
+        .arg("all")
         // can't stop darktable from getting configs give it a place to put them
         // it derives it's paths from home so we gotta give it one.
         .env("HOME", &darktable_home)
@@ -87,6 +92,7 @@ pub async fn export(
             .with_note(|| format!("input file: {}", input_file.display()))
             .with_note(|| format!("output_file: {}", output_file.display()))
             .with_note(|| format!("xmp_file: {}", xmp_file.display()))
+            .with_note(|| format!("darktable home: {}", darktable_home.as_ref().display()))
     }
 }
 
@@ -179,16 +185,17 @@ impl Drop for DarkTableHome {
 }
 
 fn darktable_home(fs: &ThrottledFs) -> color_eyre::Result<DarkTableHome> {
-    let (idx, mut home) = HOMES
+    static CREATED: AtomicUsize = AtomicUsize::new(0);
+    let mut home = HOMES
         .iter()
-        .enumerate()
-        .find_map(|(idx, h)| h.try_lock().ok().map(|h| (idx, h)))
+        .find_map(|h| h.try_lock().ok())
         .expect("we create the same number of homes as semaphores");
 
     if let Some(home) = home.take() {
         return Ok(DarkTableHome(home));
     }
 
+    let idx = CREATED.fetch_add(1, Ordering::Relaxed);
     let dir = if crate::running_as_root() {
         Path::new("/var/cache").to_path_buf()
     } else {

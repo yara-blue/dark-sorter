@@ -11,11 +11,6 @@ use crate::watcher::{EyreWithPath, ResultExt};
 use crate::xmp::{EditHash, ParsedXmps, Xmp};
 use crate::{ImageExporter, database, xmp};
 
-/// Should remove if link:
-/// - is not pointing to a file
-/// - the symlink does not point to a jpg
-/// - the corresponding xmp does not exist
-/// - the corresponding xmp does not have a rating for the image
 #[instrument(skip_all, fields(preview=?preview, source_dir=?source_dir))]
 pub async fn should_remove(
     preview: &PreviewFile,
@@ -147,7 +142,7 @@ pub(crate) async fn create_update_or_clean_one<Exporter: ImageExporter>(
 
     if raw.needs_no_export() {
         tracing::info!("copying unedited non raw");
-        fs.copy_file(&raw, &preview)
+        fs.copy_file(&raw, &preview) // should be a symlink oh well
             .await
             .wrap_err("Failed to copy over rated, unedited non raw file")?;
     } else {

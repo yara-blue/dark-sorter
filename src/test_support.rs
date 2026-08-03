@@ -66,7 +66,18 @@ impl TestFile {
         )
     }
     fn jpg_preview(self, target: &TargetDir) -> PreviewFile {
-        PreviewFile(target.0.0.join(self.name()).with_added_extension("jpg"))
+        let preview_extension = match self {
+            TestFile::A => "jpg",
+            TestFile::B => "jpg",
+            TestFile::C => "JPG",
+        };
+        PreviewFile(
+            target
+                .0
+                .0
+                .join(self.name())
+                .with_added_extension(preview_extension),
+        )
     }
 }
 

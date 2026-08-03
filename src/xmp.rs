@@ -132,8 +132,7 @@ impl Xmp {
             let extension = input_file
                 .0
                 .extension()
-                .expect("Xmp parser checked that the input file has an extension")
-                .to_ascii_lowercase();
+                .expect("Xmp parser checked that the input file has an extension");
             PreviewFile(target.0.0.join(&*self.input_file).with_extension(extension))
         } else {
             PreviewFile(target.0.0.join(&*self.input_file).with_extension("jpg"))
@@ -142,15 +141,6 @@ impl Xmp {
 
     pub(crate) fn input_file(&self, source: &SourceDir) -> InputFile {
         InputFile(source.0.0.join(&*self.input_file))
-    }
-
-    pub async fn preview_missing(&self, target: impl AsRef<TargetDir>) -> color_eyre::Result<bool> {
-        let preview_path = self.preview_file(target.as_ref());
-        let preview_exists = tokio::fs::try_exists(&preview_path)
-            .await
-            .wrap_err("Could not check if jpeg exists")
-            .note_path(preview_path)?;
-        Ok(!preview_exists)
     }
 
     pub fn rated(&self) -> bool {
