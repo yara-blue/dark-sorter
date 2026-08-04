@@ -6,11 +6,9 @@ use std::num::ParseIntError;
 use std::path::Path;
 use std::sync::Arc;
 
-use color_eyre::eyre::Context;
 use tokio::sync::Notify;
 
 use crate::fs::{InputFile, PreviewFile, SourceDir, TargetDir, ThrottledFs, XmpFile};
-use crate::watcher::EyreWithPath;
 
 mod edits;
 
@@ -44,7 +42,7 @@ pub(crate) enum XmpState {
 
 impl ParsedXmps {
     #[tracing::instrument(skip_all, fields(path=?path))]
-    pub(crate) async fn get_cached_or_read_from_file(
+    pub(crate) async fn cached_or_parse_from(
         &self,
         path: &XmpFile,
         fs: &ThrottledFs,
@@ -84,11 +82,7 @@ impl ParsedXmps {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct EditHash(u64);
-
-impl EditHash {
-    pub const NO_EDITS: Self = Self(0);
-}
+pub struct EditHash(pub u64);
 
 #[derive(Debug, Clone)]
 pub struct Xmp {
@@ -118,12 +112,12 @@ impl Xmp {
         })
     }
 
-    pub fn edit_hash(&self) -> Option<EditHash> {
+    pub fn edit_hash(&self) -> EditHash {
         let mut hasher = DefaultHasher::new();
         for edits::Edit { hash, .. } in &self.edits {
             hash.hash(&mut hasher);
         }
-        Some(EditHash(hasher.finish()))
+        EditHash(hasher.finish())
     }
 
     pub fn preview_file(&self, target: &TargetDir) -> PreviewFile {

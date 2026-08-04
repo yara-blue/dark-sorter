@@ -12,6 +12,7 @@ pub mod immich;
 mod scan;
 pub mod watcher;
 mod xmp;
+use color_eyre::eyre::Context;
 pub use xmp::Rating;
 
 pub use darktable_cli::DarktableCli;
@@ -20,7 +21,7 @@ pub use fs::{BaseSourceDir, BaseTargetDir, ThrottledFs};
 pub use scan::scan_clean_and_link;
 use tracing::{info, warn};
 
-use crate::fs::{PreviewFile, InputFile, XmpFile};
+pub use crate::fs::{InputFile, PreviewFile, XmpFile};
 use crate::immich::ImmichSync;
 
 /// Only here so we can test without having to run darktable
@@ -54,7 +55,7 @@ pub async fn main_loop<Exporter: ImageExporter, W: Watcher>(
     source: BaseSourceDir,
     target: BaseTargetDir,
     fs: ThrottledFs,
-    db: Db,
+    mut db: Db,
     immich_sync: Option<ImmichSync>,
     mut watcher: Option<W>,
 ) -> color_eyre::Result<()> {
@@ -68,6 +69,7 @@ pub async fn main_loop<Exporter: ImageExporter, W: Watcher>(
             immich_sync.clone(),
         )
         .await?;
+        db = db.store_to_disk().await.wrap_err("flushing db")?;
 
         let Some(ref mut watcher) = watcher else {
             info!("Scan complete");
@@ -101,6 +103,7 @@ pub async fn main_loop<Exporter: ImageExporter, W: Watcher>(
                 immich_sync.as_ref(),
             )
             .await?;
+            db = db.store_to_disk().await.wrap_err("flushing db")?;
         }
     }
 }

@@ -21,7 +21,7 @@ async fn remove_rating() {
 
     let (watcher_controller, watcher) = TestWatcher::new();
 
-    let db = dark_sorter::Db::default();
+    let db = test_support::test_db(&source);
     let fs = dark_sorter::ThrottledFs::for_testing().unwrap();
     tokio::spawn(
         dark_sorter::main_loop::<TestExporter, _>(
@@ -56,7 +56,7 @@ async fn adding_rating() {
 
     let (watcher_controller, watcher) = TestWatcher::new();
 
-    let db = dark_sorter::Db::default();
+    let db = test_support::test_db(&source);
     let fs = dark_sorter::ThrottledFs::for_testing().unwrap();
     tokio::spawn(
         dark_sorter::main_loop::<TestExporter, _>(
@@ -95,7 +95,7 @@ async fn queued_add_remove() {
 
     let (watcher_controller, watcher) = TestWatcher::new();
 
-    let db = dark_sorter::Db::default();
+    let db = test_support::test_db(&source);
     let fs = dark_sorter::ThrottledFs::for_testing().unwrap();
     tokio::spawn(
         dark_sorter::main_loop::<TestExporter, _>(

@@ -131,7 +131,7 @@ async fn scan_clean_and_link_dir<Exporter: ImageExporter>(
         .try_for_each(|()| future::ready(Ok(())));
 
     let (_, changes) = (
-        preview::remove_stale(&source_dir, previews.iter(), &parsed_xmps, &fs),
+        preview::remove_stale(&source_dir, previews.iter(), &xmp_files, &parsed_xmps, &fs),
         preview::create_update_or_clean::<Exporter>(
             &xmp_files,
             &parsed_xmps,

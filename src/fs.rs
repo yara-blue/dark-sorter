@@ -14,6 +14,7 @@ use tokio::fs::DirEntry;
 use tokio::io;
 use tokio::sync::Semaphore;
 
+use crate::scan::preview;
 use crate::watcher::EyreWithPath;
 
 /// Limit concurrent fs access so we do not exceed the open file handle limit.
@@ -269,7 +270,7 @@ impl PreviewFile {
             .file_stem()
             .expect("A preview has a file name so a link to it has one too")
     }
-    /// something.NEF.xmp
+    /// something.<unknown>.xmp
     pub fn xmp_path(&self, source: &SourceDir) -> XmpFile {
         XmpFile(
             source
@@ -344,6 +345,33 @@ impl InputFile {
 }
 
 impl XmpFile {
+    /// ```
+    /// # use std::path::Path;
+    /// # use dark_sorter::{PreviewFile, XmpFile};
+    /// let test_cases = [
+    ///     ("hi/test.NEF.xmp", "by/test.jpg"),
+    ///     ("hi/test.DNG.xmp", "by/test.jpg"),
+    ///     ("hi/test.JPG.xmp", "by/test.JPG"),
+    ///     ("hello/hi/test.png.xmp", "goodby/see you/test.png"),
+    /// ];
+    ///
+    /// for (xmp, preview) in test_cases {
+    ///     let xmp = XmpFile(Path::new(xmp).to_path_buf());
+    ///     let preview = PreviewFile(Path::new(preview).to_path_buf());
+    ///
+    ///     assert!(xmp.corresponds_to(&preview))
+    /// }
+    /// ```
+    pub fn corresponds_to(&self, preview: &PreviewFile) -> bool {
+        let xmp = self.file_stem().as_encoded_bytes();
+        let xmp_name = xmp
+            .split(|c| *c == '.' as u8)
+            .next()
+            .expect("split gives at least one element");
+        let preview_name = preview.file_stem().as_encoded_bytes();
+        xmp_name == preview_name
+    }
+
     pub fn preview_path(&self, source: &BaseSourceDir, target: &BaseTargetDir) -> PreviewFile {
         let relative = self
             .0
@@ -405,4 +433,9 @@ impl MetadataExtExt for Metadata {
     fn group_can_write(&self, group_id: u32) -> bool {
         self.anyone_can_write() || (self.mode() & 0o020 == 0o020 && self.gid() == group_id)
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
 }

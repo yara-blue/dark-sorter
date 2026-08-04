@@ -1,4 +1,5 @@
 use color_eyre::eyre::Context;
+use futures::future;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
@@ -11,7 +12,7 @@ use tracing::info;
 use crate::fs::{Dir, DirName, InputFile, PreviewFile, SourceDir, TargetDir, XmpFile};
 use crate::watcher::EyreWithPath;
 use crate::xmp::Rating;
-use crate::{BaseSourceDir, BaseTargetDir, ImageExporter, Watcher};
+use crate::{BaseSourceDir, BaseTargetDir, Db, ImageExporter, Watcher};
 
 pub use crate::watcher;
 
@@ -65,7 +66,7 @@ impl TestFile {
                 .with_added_extension("xmp"),
         )
     }
-    fn jpg_preview(self, target: &TargetDir) -> PreviewFile {
+    pub fn preview(self, target: &TargetDir) -> PreviewFile {
         let preview_extension = match self {
             TestFile::A => "jpg",
             TestFile::B => "jpg",
@@ -146,7 +147,7 @@ impl TargetDirBuilder {
         fs::create_dir_all(&target).unwrap();
 
         for test_file in self.preview {
-            fs::write(test_file.jpg_preview(&target), FAKE_JPEG_CONTENT).unwrap();
+            fs::write(test_file.preview(&target), FAKE_JPEG_CONTENT).unwrap();
         }
 
         (dir, base_target)
@@ -156,7 +157,7 @@ impl TargetDirBuilder {
 #[track_caller]
 pub fn assert_preview_in_place(target: &BaseTargetDir, test_file: TestFile) {
     let target = target.subdir(&test_subdir());
-    let file = test_file.jpg_preview(target.as_ref());
+    let file = test_file.preview(target.as_ref());
     assert!(&file.0.is_file(), "No preview found at: {file:?}");
     let content = fs::read_to_string(file).unwrap();
     assert_eq!(content, FAKE_JPEG_CONTENT);
@@ -165,8 +166,22 @@ pub fn assert_preview_in_place(target: &BaseTargetDir, test_file: TestFile) {
 #[track_caller]
 pub fn assert_preview_missing(target: &BaseTargetDir, test_file: TestFile) {
     let target = target.subdir(&test_subdir());
-    let file = test_file.jpg_preview(target.as_ref());
+    let file = test_file.preview(target.as_ref());
     assert!(!file.0.exists());
+}
+
+pub fn mark_preview(target: &BaseTargetDir, test_file: TestFile) {
+    let target = target.subdir(&test_subdir());
+    let file = test_file.preview(target.as_ref());
+    fs::write(file, "marked").unwrap();
+}
+
+#[track_caller]
+pub fn assert_preview_marked(target: &BaseTargetDir, test_file: TestFile) {
+    let target = target.subdir(&test_subdir());
+    let file = test_file.preview(target.as_ref());
+    let content = fs::read_to_string(file).unwrap();
+    assert_eq!(content, "marked");
 }
 
 pub fn remove_rating(source: &SourceDir, test_file: TestFile) {
@@ -190,7 +205,7 @@ pub fn add_file(file: TestFile, rating: Rating, source: impl AsRef<SourceDir>) {
         include_str!("../tests/assets/small_raw.NEF.xmp")
             .replace("<FILENAME>", file.name())
             .replace("<EXTENSION>", file.extension())
-            .replace("<RATING>", &dbg!(dbg!(rating).number()).to_string()),
+            .replace("<RATING>", &rating.number().to_string()),
     )
     .unwrap();
 }
@@ -311,4 +326,8 @@ impl Watcher for TestWatcher {
     fn overflown(&self) -> bool {
         false
     }
+}
+
+pub fn test_db(source: &BaseSourceDir) -> Db {
+    Db::new(source.0.0.0.join("test_db.bitcode")).unwrap()
 }

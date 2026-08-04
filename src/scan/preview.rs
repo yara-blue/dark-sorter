@@ -1,27 +1,29 @@
 pub(crate) use std::future;
 use std::io::ErrorKind;
 
-use color_eyre::eyre::Context;
+use color_eyre::eyre::{Context, OptionExt};
 use futures::TryStreamExt;
 use futures::stream::FuturesUnordered;
 use tracing::{debug, instrument};
 
 use crate::fs::{PreviewFile, SourceDir, TargetDir, ThrottledFs, XmpFile};
 use crate::watcher::{EyreWithPath, ResultExt};
-use crate::xmp::{EditHash, ParsedXmps, Xmp};
+use crate::xmp::{ParsedXmps, Xmp};
 use crate::{ImageExporter, database, xmp};
 
 #[instrument(skip_all, fields(preview=?preview, source_dir=?source_dir))]
 pub async fn should_remove(
     preview: &PreviewFile,
     source_dir: &SourceDir,
+    xmp_files: &[XmpFile],
     xmps: &xmp::ParsedXmps,
     fs: &ThrottledFs,
 ) -> color_eyre::Result<bool> {
-    let xmp = match xmps
-        .get_cached_or_read_from_file(&preview.xmp_path(source_dir), fs)
-        .await
-    {
+    let Some(xmp_path) = xmp_files.iter().find(|xmp| xmp.corresponds_to(preview)) else {
+        debug!("No known xmp corresponding with preview");
+        return Ok(true);
+    };
+    let xmp = match xmps.cached_or_parse_from(xmp_path, fs).await {
         Ok(xmp) => xmp,
         Err(xmp::XmpError::NotFound(_)) => {
             debug!("No known xmp corresponding with preview");
@@ -36,12 +38,13 @@ pub async fn should_remove(
 pub async fn remove_stale(
     source_dir: &SourceDir,
     previews: impl Iterator<Item = &PreviewFile>,
+    xmp_files: &[XmpFile],
     xmps: &xmp::ParsedXmps,
     fs: &ThrottledFs,
 ) -> color_eyre::Result<()> {
     previews
         .map(|preview| async move {
-            if should_remove(preview, source_dir, xmps, fs)
+            if should_remove(preview, source_dir, xmp_files, xmps, fs)
                 .await
                 .wrap_err("Could not determine whether preview should be removed")?
             {
@@ -71,7 +74,7 @@ pub(crate) async fn create_update_or_clean<Exporter: ImageExporter>(
         .iter()
         .cloned()
         .map(|xmp_file| async move {
-            let xmp = xmps.get_cached_or_read_from_file(&xmp_file, fs).await?;
+            let xmp = xmps.cached_or_parse_from(&xmp_file, fs).await?;
             create_update_or_clean_one::<Exporter>(
                 xmp,
                 xmp_file,
@@ -119,7 +122,7 @@ pub(crate) async fn create_update_or_clean_one<Exporter: ImageExporter>(
     fs: &ThrottledFs,
     previously_exported: &database::Db,
 ) -> color_eyre::Result<Change> {
-    let raw = xmp.input_file(&source);
+    let input = xmp.input_file(&source);
     let preview = xmp.preview_file(&target);
 
     if !xmp.rated() {
@@ -132,29 +135,25 @@ pub(crate) async fn create_update_or_clean_one<Exporter: ImageExporter>(
         };
     }
 
-    if let Some(current_edits) = xmp.edit_hash()
-        && let Some(exported_edits) = previously_exported.get(&xmp_file)
-        && current_edits == exported_edits
+    if let Some(exported_edits) = previously_exported.get(&xmp_file)
+        && xmp.edit_hash() == exported_edits
         && preview.exists().await
     {
         return Ok(Change::None);
     };
 
-    if raw.needs_no_export() {
+    if input.needs_no_export() {
         tracing::info!("copying unedited non raw");
-        fs.copy_file(&raw, &preview) // should be a symlink oh well
+        fs.copy_file(&input, &preview) // should be a symlink oh well
             .await
             .wrap_err("Failed to copy over rated, unedited non raw file")?;
     } else {
-        Exporter::export(&xmp_file, &raw, &preview, fs)
+        Exporter::export(&xmp_file, &input, &preview, fs)
             .await
             .wrap_err("failed to create preview")?;
-        previously_exported.insert(
-            xmp_file.clone(),
-            xmp.edit_hash().unwrap_or(EditHash::NO_EDITS),
-        );
     }
 
+    previously_exported.insert(xmp_file.clone(), xmp.edit_hash());
     Ok(Change::Added(preview))
 }
 
