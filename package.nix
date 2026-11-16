@@ -22,6 +22,7 @@ rust.buildRustPackage {
   inherit src;
 
   nativeBuildInputs = [ pkgs.makeWrapper ];
+  buildInputs = [ pkgs.aws-lc ];
 
   cargoLock = {
     lockFile = "${src}/Cargo.lock";
@@ -33,7 +34,7 @@ rust.buildRustPackage {
   meta = {
     inherit (cargoTOML.package) description homepage;
     maintainers = cargoTOML.package.authors;
-	mainProgram = cargoTOML.package.name;
+    mainProgram = cargoTOML.package.name;
   };
 
   postInstall = ''
