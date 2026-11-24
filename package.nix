@@ -21,7 +21,14 @@ rust.buildRustPackage {
 
   inherit src;
 
-  nativeBuildInputs = [ pkgs.makeWrapper ];
+  nativeBuildInputs = [ 
+  	pkgs.makeWrapper 
+	pkgs.pkg-config
+  ];
+
+  buildInputs = [
+  	pkgs.aws-lc
+  ];
 
   cargoLock = {
     lockFile = "${src}/Cargo.lock";
